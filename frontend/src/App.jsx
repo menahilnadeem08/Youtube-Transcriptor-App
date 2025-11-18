@@ -52,7 +52,7 @@ export default function App() {
 
     const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
     
-    fetch(`${API_URL}/api/transcript`, {
+    fetch("https://youtube-transcriptor-app-2.onrender.com/api/transcript",{
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
