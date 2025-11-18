@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, Loader2, CheckCircle, AlertCircle, Clock, FileText } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText } from 'lucide-react';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -16,14 +16,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [focusedInput, setFocusedInput] = useState(false);
 
-  // Extract YouTube video ID from URL
   const extractVideoId = (url) => {
     const patterns = [
       /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
       /^([a-zA-Z0-9_-]{11})$/
     ];
-    
     for (const pattern of patterns) {
       const match = url.match(pattern);
       if (match) return match[1];
@@ -31,129 +30,58 @@ export default function App() {
     return null;
   };
 
-  // Validate YouTube URL
   const isValidYouTubeUrl = (url) => {
     return extractVideoId(url) !== null;
   };
 
-  // Fetch transcript from YouTube
-  const fetchTranscript = async (videoId) => {
-    const response = await fetch(`https://api.anthropic.com/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: `You are a YouTube transcript fetcher. Extract the transcript/captions from this YouTube video ID: ${videoId}
+  const handleSubmit = () => {
+    setError('');
+    setResult(null);
 
-Use this method:
-1. The video URL is: https://www.youtube.com/watch?v=${videoId}
-2. Try to fetch captions using the YouTube Transcript API approach
-3. Return ONLY the transcript text, nothing else
-
-If captions are not available, return: "NO_CAPTIONS_AVAILABLE"`
-        }]
-      })
-    });
-
-    const data = await response.json();
-    const text = data.content[0].text;
-    
-    if (text === "NO_CAPTIONS_AVAILABLE") {
-      throw new Error("This video doesn't have captions available. Try another video.");
+    if (!videoUrl.trim()) {
+      setError('Please enter a YouTube URL');
+      return;
     }
-    
-    return text;
-  };
 
-  // Translate text using Claude
-  const translateText = async (text, targetLang) => {
-    const langName = SUPPORTED_LANGUAGES.find(l => l.code === targetLang)?.name || 'Spanish';
+    if (!isValidYouTubeUrl(videoUrl)) {
+      setError('Please enter a valid YouTube URL');
+      return;
+    }
+
+    setLoading(true);
+
+    const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
     
-    const response = await fetch(`https://api.anthropic.com/v1/messages`, {
+    fetch(`${API_URL}/api/transcript`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
-        messages: [{
-          role: 'user',
-          content: `You are a professional translator. Translate the following text to ${langName}. 
-Maintain the original meaning, tone, and formatting. Return ONLY the translated text without any preamble or explanations.
-
-Text to translate:
-${text}`
-        }]
+        videoUrl: videoUrl,
+        targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name
       })
-    });
-
-    const data = await response.json();
-    return data.content[0].text;
-  };
-
-  // Calculate reading stats
-  const calculateStats = (text) => {
-    const words = text.trim().split(/\s+/).length;
-    const readingTime = Math.ceil(words / 200); // 200 WPM average
-    return { words, readingTime };
-  };
-
-  // Handle form submission
-// Replace the entire handleSubmit function with this:
-const handleSubmit = () => {
-  setError('');
-  setResult(null);
-  
-  if (!videoUrl.trim()) {
-    setError('Please enter a YouTube URL');
-    return;
-  }
-  
-  if (!isValidYouTubeUrl(videoUrl)) {
-    setError('Please enter a valid YouTube URL');
-    return;
-  }
-
-  setLoading(true);
-
-  // Call your backend instead of Anthropic directly
-  fetch('http://localhost:3000/api/transcript', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      videoUrl: videoUrl,
-      targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name 
     })
-  })
-  .then(res => res.json())
-  .then(data => {
-    if (data.success) {
-      setResult({
-        original: data.original,
-        translated: data.translated,
-        words: data.wordCount,
-        readingTime: data.readingTime,
-        videoId: data.videoId
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setResult({
+            original: data.original,
+            translated: data.translated,
+            words: data.wordCount,
+            readingTime: data.readingTime,
+            videoId: data.videoId
+          });
+        } else {
+          setError(data.error || 'Failed to process video');
+        }
+      })
+      .catch(err => {
+        setError('Failed to connect to server. Make sure backend is running.');
+      })
+      .finally(() => {
+        setLoading(false);
       });
-    } else {
-      setError(data.error || 'Failed to process video');
-    }
-  })
-  .catch(err => {
-    setError('Failed to connect to server. Make sure backend is running.');
-  })
-  .finally(() => {
-    setLoading(false);
-  });
-};
+  };
 
-  // Download transcript as TXT
   const downloadTranscript = () => {
     const element = document.createElement('a');
     const file = new Blob([result.translated], { type: 'text/plain' });
@@ -168,41 +96,43 @@ const handleSubmit = () => {
     <div style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      padding: '20px',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+      padding: '40px 20px',
+      fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
       <div style={{
-        maxWidth: '900px',
-        margin: '0 auto',
-        background: 'white',
-        borderRadius: '20px',
-        padding: '40px',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+        maxWidth: '800px',
+        margin: '0 auto'
       }}>
-        
         {/* Header */}
-        <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+        <div style={{
+          textAlign: 'center',
+          color: 'white',
+          marginBottom: '40px'
+        }}>
           <h1 style={{
             fontSize: '2.5rem',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
+            fontWeight: 'bold',
             marginBottom: '10px'
           }}>
             🎥 YouTube Transcript Generator
           </h1>
-          <p style={{ color: '#666', fontSize: '1.1rem' }}>
+          <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
             Extract and translate YouTube captions instantly
           </p>
         </div>
 
         {/* Form */}
-        <div style={{ marginBottom: '30px' }}>
-          <div style={{ marginBottom: '20px' }}>
+        <div style={{
+          backgroundColor: 'white',
+          borderRadius: '20px',
+          padding: '40px',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+        }}>
+          <div style={{ marginBottom: '24px' }}>
             <label style={{
               display: 'block',
-              marginBottom: '8px',
               fontWeight: '600',
+              marginBottom: '8px',
               color: '#333'
             }}>
               YouTube URL
@@ -212,27 +142,27 @@ const handleSubmit = () => {
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
+              onFocus={() => setFocusedInput(true)}
+              onBlur={() => setFocusedInput(false)}
               placeholder="https://www.youtube.com/watch?v=..."
               style={{
                 width: '100%',
                 padding: '12px 16px',
                 fontSize: '1rem',
-                border: '2px solid #e0e0e0',
+                border: `2px solid ${focusedInput ? '#667eea' : '#e0e0e0'}`,
                 borderRadius: '10px',
                 outline: 'none',
                 transition: 'border 0.3s',
                 boxSizing: 'border-box'
               }}
-              onFocus={(e) => e.target.style.borderColor = '#667eea'}
-              onBlur={(e) => e.target.style.borderColor = '#e0e0e0'}
             />
           </div>
 
-          <div style={{ marginBottom: '20px' }}>
+          <div style={{ marginBottom: '24px' }}>
             <label style={{
               display: 'block',
-              marginBottom: '8px',
               fontWeight: '600',
+              marginBottom: '8px',
               color: '#333'
             }}>
               Target Language
@@ -269,22 +199,15 @@ const handleSubmit = () => {
               fontSize: '1.1rem',
               fontWeight: '600',
               color: 'white',
-              background: loading ? '#ccc' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
               border: 'none',
               borderRadius: '10px',
               cursor: loading ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '10px',
-              transition: 'transform 0.2s',
-              boxSizing: 'border-box'
-            }}
-            onMouseOver={(e) => {
-              if (!loading) e.target.style.transform = 'translateY(-2px)';
-            }}
-            onMouseOut={(e) => {
-              e.target.style.transform = 'translateY(0)';
+              gap: '8px',
+              transition: 'transform 0.2s'
             }}
           >
             {loading ? (
@@ -301,87 +224,83 @@ const handleSubmit = () => {
         {/* Error Message */}
         {error && (
           <div style={{
+            marginTop: '20px',
             padding: '16px',
-            background: '#fee',
-            border: '1px solid #fcc',
+            backgroundColor: '#fee2e2',
+            border: '2px solid #ef4444',
             borderRadius: '10px',
-            color: '#c33',
+            color: '#991b1b',
             display: 'flex',
             alignItems: 'center',
-            gap: '10px',
-            marginBottom: '20px'
+            gap: '12px'
           }}>
-            <AlertCircle size={20} />
-            {error}
+            <AlertCircle size={24} />
+            <span>{error}</span>
           </div>
         )}
 
         {/* Success Result */}
         {result && (
           <div style={{
-            border: '2px solid #667eea',
-            borderRadius: '15px',
+            marginTop: '30px',
+            backgroundColor: 'white',
+            borderRadius: '20px',
             padding: '30px',
-            background: '#f8f9ff'
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
           }}>
             {/* Stats */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-              gap: '15px',
-              marginBottom: '25px'
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '16px',
+              marginBottom: '24px'
             }}>
               <div style={{
-                background: 'white',
-                padding: '15px',
+                padding: '16px',
+                backgroundColor: '#f3f4f6',
                 borderRadius: '10px',
                 textAlign: 'center'
               }}>
-                <FileText size={24} style={{ color: '#667eea', marginBottom: '8px' }} />
+                <FileText size={24} style={{ margin: '0 auto 8px', color: '#667eea' }} />
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#333' }}>
                   {result.words}
                 </div>
-                <div style={{ fontSize: '0.9rem', color: '#666' }}>Words</div>
+                <div style={{ fontSize: '0.875rem', color: '#666' }}>Words</div>
               </div>
-
               <div style={{
-                background: 'white',
-                padding: '15px',
+                padding: '16px',
+                backgroundColor: '#f3f4f6',
                 borderRadius: '10px',
                 textAlign: 'center'
               }}>
-                <Clock size={24} style={{ color: '#667eea', marginBottom: '8px' }} />
+                <Clock size={24} style={{ margin: '0 auto 8px', color: '#667eea' }} />
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#333' }}>
                   {result.readingTime} min
                 </div>
-                <div style={{ fontSize: '0.9rem', color: '#666' }}>Reading Time</div>
+                <div style={{ fontSize: '0.875rem', color: '#666' }}>Reading Time</div>
               </div>
-
               <div style={{
-                background: 'white',
-                padding: '15px',
+                padding: '16px',
+                backgroundColor: '#f3f4f6',
                 borderRadius: '10px',
                 textAlign: 'center'
               }}>
-                <CheckCircle size={24} style={{ color: '#10b981', marginBottom: '8px' }} />
-                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#333' }}>
-                  ✓
-                </div>
-                <div style={{ fontSize: '0.9rem', color: '#666' }}>Translated</div>
+                <div style={{ fontSize: '1.5rem', margin: '0 auto 8px' }}>✓</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#333' }}>Done</div>
+                <div style={{ fontSize: '0.875rem', color: '#666' }}>Translated</div>
               </div>
             </div>
 
             {/* Transcript */}
             <div style={{
-              background: 'white',
               padding: '20px',
+              backgroundColor: '#f9fafb',
               borderRadius: '10px',
               marginBottom: '20px',
               maxHeight: '400px',
               overflowY: 'auto',
               lineHeight: '1.8',
-              color: '#333',
-              fontSize: '1rem'
+              color: '#333'
             }}>
               {result.translated}
             </div>
@@ -395,19 +314,16 @@ const handleSubmit = () => {
                 fontSize: '1rem',
                 fontWeight: '600',
                 color: 'white',
-                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                backgroundColor: '#10b981',
                 border: 'none',
                 borderRadius: '10px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '10px',
-                transition: 'transform 0.2s',
-                boxSizing: 'border-box'
+                gap: '8px',
+                transition: 'transform 0.2s'
               }}
-              onMouseOver={(e) => e.target.style.transform = 'translateY(-2px)'}
-              onMouseOut={(e) => e.target.style.transform = 'translateY(0)'}
             >
               <Download size={20} />
               Download Transcript (TXT)
@@ -418,14 +334,12 @@ const handleSubmit = () => {
         {/* Footer Note */}
         <div style={{
           marginTop: '30px',
-          padding: '15px',
-          background: '#f0f0f0',
-          borderRadius: '10px',
-          fontSize: '0.9rem',
-          color: '#666',
-          textAlign: 'center'
+          textAlign: 'center',
+          color: 'white',
+          opacity: 0.8,
+          fontSize: '0.875rem'
         }}>
-          <strong>Phase 1:</strong> Works with videos that have captions/subtitles available
+          Phase 1: Works with videos that have captions/subtitles available
         </div>
       </div>
 
