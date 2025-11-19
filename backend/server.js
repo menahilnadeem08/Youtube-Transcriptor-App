@@ -33,7 +33,15 @@ if (!fs.existsSync(tempDir)) {
 // Extract video ID from URL
 function extractVideoId(url) {
   const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+    // Regular YouTube URLs: youtube.com/watch?v=VIDEO_ID
+    /(?:youtube\.com\/watch\?v=)([^&\n?#]+)/,
+    // Short YouTube URLs: youtu.be/VIDEO_ID
+    /(?:youtu\.be\/)([^&\n?#]+)/,
+    // YouTube embed URLs: youtube.com/embed/VIDEO_ID
+    /(?:youtube\.com\/embed\/)([^&\n?#]+)/,
+    // YouTube Shorts URLs: youtube.com/shorts/VIDEO_ID
+    /(?:youtube\.com\/shorts\/)([^&\n?#]+)/,
+    // Direct video ID (11 characters)
     /^([a-zA-Z0-9_-]{11})$/
   ];
   
