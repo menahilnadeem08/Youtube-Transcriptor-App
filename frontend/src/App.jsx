@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -7,7 +9,10 @@ const SUPPORTED_LANGUAGES = [
   { code: 'fr', name: 'French' },
   { code: 'ar', name: 'Arabic' },
   { code: 'hi', name: 'Hindi' },
-  { code: 'zh', name: 'Chinese' }
+  { code: 'zh', name: 'Chinese' },
+  { code: 'ur', name: 'Urdu' },
+  { code: 'pa', name: 'Punjabi (Indian)' },
+  { code: 'pa-PK', name: 'Punjabi (Pakistani)' }
 ];
 
 export default function App() {
@@ -58,7 +63,7 @@ export default function App() {
 
     setLoading(true);
 
-    const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000' || process.env.REACT_APP_API_URL;
     
     fetch(`${API_URL}/api/transcript`, {
       method: 'POST',
@@ -90,11 +95,101 @@ export default function App() {
       });
   };
 
-  const downloadTranscript = () => {
+  // Download as TXT
+  const downloadTxt = () => {
     const element = document.createElement('a');
     const file = new Blob([result.translated], { type: 'text/plain' });
     element.href = URL.createObjectURL(file);
     element.download = `transcript_${result.videoId}.txt`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  };
+
+  // Download as PDF
+  const downloadPdf = () => {
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 15;
+    const maxWidth = pageWidth - 2 * margin;
+
+    // Add title
+    pdf.setFontSize(16);
+    pdf.text('YouTube Transcript', margin, margin);
+
+    // Add metadata
+    pdf.setFontSize(10);
+    pdf.text(`Video ID: ${result.videoId}`, margin, margin + 10);
+    pdf.text(`Word Count: ${result.words} | Reading Time: ${result.readingTime} min`, margin, margin + 16);
+    pdf.text(`Generated: ${new Date().toLocaleString()}`, margin, margin + 22);
+
+    // Add content
+    pdf.setFontSize(11);
+    const textContent = result.translated;
+    const splitText = pdf.splitTextToSize(textContent, maxWidth);
+    
+    let yPosition = margin + 35;
+    splitText.forEach((line) => {
+      if (yPosition > pageHeight - margin) {
+        pdf.addPage();
+        yPosition = margin;
+      }
+      pdf.text(line, margin, yPosition);
+      yPosition += 5;
+    });
+
+    pdf.save(`transcript_${result.videoId}.pdf`);
+  };
+
+  // Download as Word
+  const downloadWord = async () => {
+    const sections = [];
+
+    // Add title
+    sections.push(
+      new Paragraph({
+        text: 'YouTube Transcript',
+        style: 'Heading1',
+        spacing: { after: 200 }
+      })
+    );
+
+    // Add metadata
+    sections.push(
+      new Paragraph({
+        text: `Video ID: ${result.videoId}`,
+        spacing: { after: 100 }
+      }),
+      new Paragraph({
+        text: `Word Count: ${result.words} | Reading Time: ${result.readingTime} min`,
+        spacing: { after: 100 }
+      }),
+      new Paragraph({
+        text: `Generated: ${new Date().toLocaleString()}`,
+        spacing: { after: 300 }
+      })
+    );
+
+    // Add content
+    sections.push(
+      new Paragraph({
+        text: result.translated,
+        spacing: { line: 360, lineRule: 'auto' }
+      })
+    );
+
+    const doc = new Document({ sections: [{ children: sections }] });
+    const blob = await Packer.toBlob(doc);
+    
+    const element = document.createElement('a');
+    element.href = URL.createObjectURL(blob);
+    element.download = `transcript_${result.videoId}.docx`;
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
@@ -313,29 +408,89 @@ export default function App() {
               {result.translated}
             </div>
 
-            {/* Download Button */}
-            <button
-              onClick={downloadTranscript}
-              style={{
-                width: '100%',
-                padding: '12px',
-                fontSize: '1rem',
-                fontWeight: '600',
-                color: 'white',
-                backgroundColor: '#10b981',
-                border: 'none',
-                borderRadius: '10px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                transition: 'transform 0.2s'
-              }}
-            >
-              <Download size={20} />
-              Download Transcript (TXT)
-            </button>
+            {/* Download Buttons */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '10px',
+              marginBottom: '20px'
+            }}>
+              {/* Download TXT */}
+              <button
+                onClick={downloadTxt}
+                style={{
+                  padding: '12px',
+                  fontSize: '0.9rem',
+                  fontWeight: '600',
+                  color: 'white',
+                  backgroundColor: '#10b981',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  transition: 'background 0.2s',
+                  hover: { backgroundColor: '#059669' }
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#059669'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#10b981'}
+              >
+                <FileText size={18} />
+                TXT
+              </button>
+
+              {/* Download PDF */}
+              <button
+                onClick={downloadPdf}
+                style={{
+                  padding: '12px',
+                  fontSize: '0.9rem',
+                  fontWeight: '600',
+                  color: 'white',
+                  backgroundColor: '#f59e0b',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  transition: 'background 0.2s'
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#d97706'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#f59e0b'}
+              >
+                <File size={18} />
+                PDF
+              </button>
+
+              {/* Download Word */}
+              <button
+                onClick={downloadWord}
+                style={{
+                  padding: '12px',
+                  fontSize: '0.9rem',
+                  fontWeight: '600',
+                  color: 'white',
+                  backgroundColor: '#3b82f6',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  transition: 'background 0.2s'
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#1d4ed8'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#3b82f6'}
+              >
+                <Download size={18} />
+                DOCX
+              </button>
+            </div>
           </div>
         )}
 
