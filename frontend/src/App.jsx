@@ -50,9 +50,9 @@ export default function App() {
 
     setLoading(true);
 
-    const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+    const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
     
-    fetch("https://youtube-transcriptor-app-2.onrender.com/api/transcript",{
+    fetch(`${API_URL}/api/transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -339,7 +339,7 @@ export default function App() {
           opacity: 0.8,
           fontSize: '0.875rem'
         }}>
-          Phase 1: Works with videos that have captions/subtitles available
+          ✨ Works with videos with captions + AI transcription for videos without captions
         </div>
       </div>
 
