@@ -12,8 +12,6 @@ const SUPPORTED_LANGUAGES = [
   { code: 'hi', name: 'Hindi' },
   { code: 'zh', name: 'Chinese' },
   { code: 'ur', name: 'Urdu' },
-  { code: 'pa', name: 'Punjabi (Indian)' },
-  { code: 'pa-PK', name: 'Punjabi (Pakistani)' }
 ];
 
 export default function App() {
