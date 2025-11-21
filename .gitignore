@@ -16,6 +16,8 @@ ARCHITECTURE.md
 dist
 dist-ssr
 *.local
+RENDER_VS_LOCALHOST.txt
+
 
 # Editor directories and files
 .vscode/*
