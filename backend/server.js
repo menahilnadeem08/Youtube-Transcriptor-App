@@ -56,8 +56,10 @@ function extractVideoId(url) {
   return null;
 }
 
-// Download video audio (no MP3 conversion needed - Whisper accepts multiple formats)
-async function downloadAudio(videoId) {
+// Download video audio with retry logic and anti-bot measures
+async function downloadAudio(videoId, retryCount = 0) {
+  const MAX_RETRIES = 3;
+  
   try {
     const audioDir = path.join(tempDir, videoId);
     
@@ -66,15 +68,34 @@ async function downloadAudio(videoId) {
       fs.mkdirSync(audioDir, { recursive: true });
     }
     
-    console.log('Starting audio download...');
+    console.log(`Starting audio download (attempt ${retryCount + 1}/${MAX_RETRIES + 1})...`);
     
-    // Download best audio-only format (no MP3 conversion needed)
-    await YtDlp.exec(`https://www.youtube.com/watch?v=${videoId}`, {
+    // Options to bypass YouTube bot detection
+    const dlpOptions = {
       format: 'bestaudio',
       output: path.join(audioDir, '%(title)s.%(ext)s'),
       quiet: false,
-      noWarnings: true
-    });
+      noWarnings: true,
+      // Add headers to look like a browser request
+      addHeader: [
+        'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept-Language:en-US,en;q=0.9',
+        'Accept-Encoding:gzip, deflate, br'
+      ],
+      // Disable QUIC to improve compatibility
+      httpChunkSize: '1M',
+      // Add socket timeout
+      socketTimeout: '30'
+    };
+    
+    // Add cookies if available from environment
+    if (process.env.YOUTUBE_COOKIES) {
+      dlpOptions.cookies = process.env.YOUTUBE_COOKIES;
+      console.log('Using stored YouTube cookies...');
+    }
+    
+    // Try to download
+    await YtDlp.exec(`https://www.youtube.com/watch?v=${videoId}`, dlpOptions);
     
     // Find the downloaded file
     const files = fs.readdirSync(audioDir);
@@ -85,11 +106,33 @@ async function downloadAudio(videoId) {
     }
     
     const audioPath = path.join(audioDir, audioFile);
-    console.log('Audio downloaded successfully to:', audioPath);
+    console.log('✅ Audio downloaded successfully to:', audioPath);
     return audioPath;
   } catch (error) {
-    console.error('Error downloading audio:', error.message);
-    throw new Error(`Failed to download audio: ${error.message}`);
+    const errorMsg = error.message || error;
+    console.error(`❌ Download attempt ${retryCount + 1} failed:`, errorMsg);
+    
+    // Check if it's a bot detection error
+    const isBotError = errorMsg.includes('Sign in to confirm') || 
+                       errorMsg.includes('bot') ||
+                       errorMsg.includes('429') ||
+                       errorMsg.includes('403');
+    
+    // Retry with delay if it's a bot detection error and we haven't exceeded max retries
+    if (isBotError && retryCount < MAX_RETRIES) {
+      const delayMs = Math.pow(2, retryCount) * 5000; // Exponential backoff: 5s, 10s, 20s
+      console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
+      
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      return downloadAudio(videoId, retryCount + 1);
+    }
+    
+    // Provide helpful error message
+    if (isBotError) {
+      throw new Error('YouTube is blocking downloads from this server. This is a YouTube rate-limiting issue. Please try again later or use a video with available captions.');
+    }
+    
+    throw new Error(`Failed to download audio: ${errorMsg}`);
   }
 }
 
@@ -295,17 +338,27 @@ app.post('/api/transcript', async (req, res) => {
     if (!originalText || originalText.length === 0) {
       console.log('No captions found. Attempting Gemini/Whisper transcription...');
       
-      // Download audio
-      audioPath = await downloadAudio(videoId);
-      
-      // Transcribe with Gemini, OpenAI Whisper, or Whisper API (tries Gemini first, then falls back)
-      const whisperResult = await transcribeWithWhisper(audioPath);
-      originalText = whisperResult.text;
-      transcriptionMethod = whisperResult.method; // 'gemini', 'openai', or 'whisper-api'
-      
-      if (!originalText || originalText.length === 0) {
-        return res.status(400).json({ 
-          error: 'Could not extract text from transcription services.' 
+      try {
+        // Try to download audio
+        audioPath = await downloadAudio(videoId);
+        
+        // Transcribe with Gemini, OpenAI Whisper, or Whisper API (tries Gemini first, then falls back)
+        const whisperResult = await transcribeWithWhisper(audioPath);
+        originalText = whisperResult.text;
+        transcriptionMethod = whisperResult.method; // 'gemini', 'openai', or 'whisper-api'
+        
+        if (!originalText || originalText.length === 0) {
+          return res.status(400).json({ 
+            error: 'Could not extract text from transcription services.' 
+          });
+        }
+      } catch (downloadError) {
+        console.error('Audio download failed:', downloadError.message);
+        
+        // If audio download fails, provide helpful error to user
+        return res.status(400).json({
+          error: downloadError.message || 'Could not download audio from YouTube. Please try a video with available captions, or try again in a few moments.',
+          hint: 'YouTube may be blocking downloads. Videos with captions work best without audio download.'
         });
       }
     }
