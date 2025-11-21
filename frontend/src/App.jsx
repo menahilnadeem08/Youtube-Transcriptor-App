@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Download, Loader2, AlertCircle, Clock, FileText, File } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
+import LoadingOverlay from './LoadingOverlay';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -19,9 +20,36 @@ export default function App() {
   const [videoUrl, setVideoUrl] = useState('');
   const [targetLanguage, setTargetLanguage] = useState('es');
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [focusedInput, setFocusedInput] = useState(false);
+
+  // Simulate progress updates during loading
+  useEffect(() => {
+    if (!loading) return;
+
+    const startTime = Date.now();
+    const progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      
+      if (elapsed < 5000) {
+        // 0-25% in first 5 seconds (downloading)
+        setProgress(Math.min(25, (elapsed / 5000) * 25));
+      } else if (elapsed < 10000) {
+        // 25-50% in next 5 seconds (processing)
+        setProgress(Math.min(50, 25 + ((elapsed - 5000) / 5000) * 25));
+      } else if (elapsed < 20000) {
+        // 50-75% in next 10 seconds (transcribing)
+        setProgress(Math.min(75, 50 + ((elapsed - 10000) / 10000) * 25));
+      } else {
+        // 75-100% final stage (translating)
+        setProgress(Math.min(100, 75 + ((elapsed - 20000) / 10000) * 25));
+      }
+    }, 100);
+
+    return () => clearInterval(progressInterval);
+  }, [loading]);
 
   const extractVideoId = (url) => {
     const patterns = [
@@ -50,6 +78,7 @@ export default function App() {
   const handleSubmit = () => {
     setError('');
     setResult(null);
+    setProgress(0);
 
     if (!videoUrl.trim()) {
       setError('Please enter a YouTube URL');
@@ -62,6 +91,7 @@ export default function App() {
     }
 
     setLoading(true);
+    setProgress(5); // Start at 5%
 
     const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000' || process.env.REACT_APP_API_URL;
     
@@ -76,13 +106,17 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         if (data.success) {
-          setResult({
-            original: data.original,
-            translated: data.translated,
-            words: data.wordCount,
-            readingTime: data.readingTime,
-            videoId: data.videoId
-          });
+          setProgress(100); // Complete
+          // Delay closing loader for better UX
+          setTimeout(() => {
+            setResult({
+              original: data.original,
+              translated: data.translated,
+              words: data.wordCount,
+              readingTime: data.readingTime,
+              videoId: data.videoId
+            });
+          }, 500);
         } else {
           setError(data.error || 'Failed to process video');
         }
@@ -91,7 +125,10 @@ export default function App() {
         setError('Failed to connect to server. Make sure backend is running.');
       })
       .finally(() => {
-        setLoading(false);
+        setTimeout(() => {
+          setLoading(false);
+          setProgress(0);
+        }, 1000);
       });
   };
 
@@ -202,6 +239,9 @@ export default function App() {
       padding: '40px 20px',
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
+      {/* Loading Overlay with Progress */}
+      <LoadingOverlay isVisible={loading} progress={progress} />
+
       <div style={{
         maxWidth: '800px',
         margin: '0 auto'
