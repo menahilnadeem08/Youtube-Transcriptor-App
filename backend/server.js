@@ -1,3 +1,21 @@
+// At the top of your main server file (e.g., index.js, server.js)
+const { execSync } = require('child_process');
+const path = require('path');
+
+// Auto-update yt-dlp on server start
+const ytdlpPath = path.join(__dirname, 'node_modules/yt-dlp-exec/bin/yt-dlp');
+
+console.log('Checking yt-dlp version...');
+try {
+  execSync(`${ytdlpPath} -U`, { 
+    stdio: 'inherit',
+    timeout: 60000 
+  });
+  console.log('✓ yt-dlp updated successfully');
+} catch (error) {
+  console.warn('⚠ Could not update yt-dlp:', error.message);
+}
+
 const express = require('express');
 const cors = require('cors');
 const { Innertube } = require('youtubei.js');
@@ -7,7 +25,6 @@ const YtDlp = require('yt-dlp-exec');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
-const path = require('path');
 const { createWriteStream } = require('fs');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 require('dotenv').config();
