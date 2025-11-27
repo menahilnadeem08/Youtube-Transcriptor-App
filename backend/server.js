@@ -1,30 +1,17 @@
-// At the top of your main server file (e.g., index.js, server.js)
-const { execSync } = require('child_process');
-const path = require('path');
-
-// Auto-update yt-dlp on server start
-const ytdlpPath = path.join(__dirname, 'node_modules/yt-dlp-exec/bin/yt-dlp');
-
-console.log('Checking yt-dlp version...');
-try {
-  execSync(`${ytdlpPath} -U`, { 
-    stdio: 'inherit',
-    timeout: 60000 
-  });
-  console.log('✓ yt-dlp updated successfully');
-} catch (error) {
-  console.warn('⚠ Could not update yt-dlp:', error.message);
-}
-
+// Backend server for YouTube Transcript Generator
 const express = require('express');
 const cors = require('cors');
 const { Innertube } = require('youtubei.js');
 const Groq = require('groq-sdk').default;
 const OpenAI = require('openai');
-const YtDlp = require('yt-dlp-exec');
 const fs = require('fs');
-const { createWriteStream } = require('fs');
+const path = require('path');
+const { promisify } = require('util');
+const { exec } = require('child_process');
+
 require('dotenv').config();
+
+const execAsync = promisify(exec);
 
 const app = express();
 app.use(cors());
@@ -63,61 +50,61 @@ function extractVideoId(url) {
   return null;
 }
 
-// Download video audio with retry logic and anti-bot measures
-async function downloadAudio(videoId, retryCount = 0) {
+// Download video audio using yt-dlp (same as main project)
+async function downloadAudio(url, retryCount = 0) {
   const MAX_RETRIES = 3;
   
   try {
-    const audioDir = path.join(tempDir, videoId);
+    console.log(`  📥 Downloading: ${url} (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
     
-    // Create directory for this video's audio
-    if (!fs.existsSync(audioDir)) {
-      fs.mkdirSync(audioDir, { recursive: true });
+    const outputTemplate = path.join(tempDir, '%(title)s.%(ext)s');
+    
+    // Use yt-dlp - same command as main project
+    const cmd = `py -m yt_dlp -f bestaudio --no-playlist -o "${outputTemplate}" "${url}" 2>&1`;
+    
+    const { stdout, stderr } = await execAsync(cmd, { 
+      maxBuffer: 50 * 1024 * 1024, // Increased to 50MB
+      timeout: 120000 
+    });
+    
+    if (stderr && stderr.includes('ERROR')) {
+      console.log(`   Debug: ${stderr.substring(0, 150)}`);
+    }
+
+    // Wait and find the downloaded file
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    const files = fs.readdirSync(tempDir);
+    console.log(`   Files in temp: ${files.join(', ')}`);
+    
+    // Filter for audio files (same as main project)
+    const audioFiles = files.filter(f => {
+      const ext = path.extname(f).toLowerCase();
+      return ['.webm', '.m4a', '.mp3', '.opus', '.aac', '.flac', '.wav', '.mkv', '.f251', '.m4b'].includes(ext);
+    });
+    
+    if (audioFiles.length > 0) {
+      const latestFile = audioFiles.sort().reverse()[0];
+      const fullPath = path.join(tempDir, latestFile);
+      const stats = fs.statSync(fullPath);
+      console.log(`  ✓ Downloaded (${path.extname(latestFile)}, ${(stats.size / 1024 / 1024).toFixed(1)}MB)`);
+      return fullPath;
+    }
+
+    console.log(`  ✗ No audio file found - Video might be age-restricted`);
+    
+    // Retry if not found
+    if (retryCount < MAX_RETRIES) {
+      const delayMs = Math.pow(2, retryCount) * 5000;
+      console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      return downloadAudio(url, retryCount + 1);
     }
     
-    console.log(`Starting audio download (attempt ${retryCount + 1}/${MAX_RETRIES + 1})...`);
-    
-    // Options to bypass YouTube bot detection
-    const dlpOptions = {
-      format: 'bestaudio',
-      output: path.join(audioDir, '%(title)s.%(ext)s'),
-      quiet: false,
-      noWarnings: true,
-      // Add headers to look like a browser request
-      addHeader: [
-        'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept-Language:en-US,en;q=0.9',
-        'Accept-Encoding:gzip, deflate, br'
-      ],
-      // Disable QUIC to improve compatibility
-      httpChunkSize: '1M',
-      // Add socket timeout
-      socketTimeout: '30'
-    };
-    
-    // Add cookies if available from environment
-    if (process.env.YOUTUBE_COOKIES) {
-      dlpOptions.cookies = process.env.YOUTUBE_COOKIES;
-      console.log('Using stored YouTube cookies...');
-    }
-    
-    // Try to download
-    await YtDlp.exec(`https://www.youtube.com/watch?v=${videoId}`, dlpOptions);
-    
-    // Find the downloaded file
-    const files = fs.readdirSync(audioDir);
-    const audioFile = files.find(f => !f.startsWith('.'));
-    
-    if (!audioFile) {
-      throw new Error('No audio file found after download');
-    }
-    
-    const audioPath = path.join(audioDir, audioFile);
-    console.log('✅ Audio downloaded successfully to:', audioPath);
-    return audioPath;
+    return null;
   } catch (error) {
-    const errorMsg = error.message || error;
-    console.error(`❌ Download attempt ${retryCount + 1} failed:`, errorMsg);
+    const errorMsg = error.message || error.toString();
+    console.log(`  ✗ Download failed: ${errorMsg.substring(0, 100)}`);
     
     // Check if it's a bot detection error
     const isBotError = errorMsg.includes('Sign in to confirm') || 
@@ -127,19 +114,14 @@ async function downloadAudio(videoId, retryCount = 0) {
     
     // Retry with delay if it's a bot detection error and we haven't exceeded max retries
     if (isBotError && retryCount < MAX_RETRIES) {
-      const delayMs = Math.pow(2, retryCount) * 5000; // Exponential backoff: 5s, 10s, 20s
+      const delayMs = Math.pow(2, retryCount) * 5000;
       console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
       
       await new Promise(resolve => setTimeout(resolve, delayMs));
-      return downloadAudio(videoId, retryCount + 1);
+      return downloadAudio(url, retryCount + 1);
     }
     
-    // Provide helpful error message
-    if (isBotError) {
-      throw new Error('YouTube is blocking downloads from this server. This is a YouTube rate-limiting issue. Please try again later or use a video with available captions.');
-    }
-    
-    throw new Error(`Failed to download audio: ${errorMsg}`);
+    return null;
   }
 }
 
@@ -241,8 +223,14 @@ app.post('/api/transcript', async (req, res) => {
       console.log('No captions found. Attempting Whisper transcription...');
       
       try {
-        // Try to download audio
-        audioPath = await downloadAudio(videoId);
+        // Try to download audio using the full YouTube URL
+        audioPath = await downloadAudio(videoUrl);
+        
+        if (!audioPath) {
+          return res.status(400).json({ 
+            error: 'Could not download audio from YouTube. The video might be age-restricted, private, or unavailable.' 
+          });
+        }
         
         // Transcribe with OpenAI Whisper
         const whisperResult = await transcribeWithWhisper(audioPath);
