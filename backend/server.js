@@ -316,6 +316,19 @@ app.post('/api/transcript', async (req, res) => {
   }
 });
 
+app.get('/api/health', (req, res) => {
+  console.log(`[HEALTH CHECK] ${new Date().toISOString()}`);
+  res.json({ 
+    status: 'ok',
+    service: 'YouTube Transcript Backend',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+app.get('/', (req, res) => {
+  res.json({ message: 'YouTube Transcript Backend', status: 'running' });
+});
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
