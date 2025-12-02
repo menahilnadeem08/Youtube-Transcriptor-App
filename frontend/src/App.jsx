@@ -91,7 +91,8 @@ export default function App() {
     setLoading(true);
     setProgress(5); // Start at 5%
 
-    const API_URL = 'http://localhost:3000';
+    const API_URL = 'http://18.217.107.170';  // your EC2 public IP
+
     
     fetch(`${API_URL}/api/transcript`, {
       method: 'POST',
