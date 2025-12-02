@@ -91,7 +91,7 @@ export default function App() {
     setLoading(true);
     setProgress(5); // Start at 5%
 
-    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000' || process.env.REACT_APP_API_URL;
+    const API_URL = 'http://localhost:3000';
     
     fetch(`${API_URL}/api/transcript`, {
       method: 'POST',
