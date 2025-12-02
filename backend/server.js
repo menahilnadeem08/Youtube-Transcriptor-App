@@ -1,15 +1,21 @@
 // Backend server for YouTube Transcript Generator
-const express = require('express');
-const cors = require('cors');
-const { Innertube } = require('youtubei.js');
-const Groq = require('groq-sdk').default;
-const OpenAI = require('openai');
-const fs = require('fs');
-const path = require('path');
-const { promisify } = require('util');
-const { exec } = require('child_process');
+import express from 'express';
+import cors from 'cors';
+import { Innertube } from 'youtubei.js';
+import Groq from 'groq-sdk';
+import OpenAI from 'openai';
+import fs from 'fs';
+import path from 'path';
+import { promisify } from 'util';
+import { exec } from 'child_process';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 
-require('dotenv').config();
+dotenv.config();
+
+// ES modules equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const execAsync = promisify(exec);
 
