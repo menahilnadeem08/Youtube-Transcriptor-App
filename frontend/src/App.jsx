@@ -91,10 +91,10 @@ export default function App() {
     setLoading(true);
     setProgress(5); // Start at 5%
 
-    const API_URL = 'http://18.217.107.170:3000';  // your EC2 public IP
-
+    // Use environment variable or default to relative path for production
+    const API_URL = import.meta.env.VITE_API_URL || '/api';
     
-    fetch(`${API_URL}/api/transcript`, {
+    fetch(`${API_URL}/transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

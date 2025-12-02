@@ -65,8 +65,11 @@ async function downloadAudio(url, retryCount = 0) {
     
     const outputTemplate = path.join(tempDir, '%(title)s.%(ext)s');
     
-    // Use yt-dlp - same command as main project
-    const cmd = `py -m yt_dlp -f bestaudio --no-playlist -o "${outputTemplate}" "${url}" 2>&1`;
+    // Use yt-dlp - detect OS and use appropriate command
+    // On Linux/EC2: use 'yt-dlp', on Windows: use 'py -m yt_dlp'
+    const isWindows = process.platform === 'win32';
+    const ytDlpCmd = isWindows ? 'py -m yt_dlp' : 'yt-dlp';
+    const cmd = `${ytDlpCmd} -f bestaudio --no-playlist -o "${outputTemplate}" "${url}" 2>&1`;
     
     const { stdout, stderr } = await execAsync(cmd, { 
       maxBuffer: 50 * 1024 * 1024, // Increased to 50MB
@@ -325,10 +328,7 @@ app.get('/', (req, res) => {
 });
 const PORT = process.env.PORT || 3000;
 
-// app.listen(PORT, () => {
-//   console.log(`Server is running on ${PORT}`);
-// });
-
-app.listen(3000, '0.0.0.0', () => {
-  console.log('Server is running on 3000');
+// Listen on all interfaces (0.0.0.0) for EC2 deployment
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server is running on port ${PORT}`);
 });
