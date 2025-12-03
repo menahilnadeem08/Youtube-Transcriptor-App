@@ -313,7 +313,7 @@ app.post('/api/transcript', async (req, res) => {
       ],
       model: "llama-3.3-70b-versatile",
       temperature: 0.3,
-      max_tokens: 8000,
+      max_tokens: 32768, // Increased from 8000 to maximum (32,768 tokens)
     });
 
     const translatedText = completion.choices[0].message.content;
