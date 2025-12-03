@@ -10,6 +10,7 @@ import { promisify } from 'util';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import Stripe from 'stripe';
 
 dotenv.config();
 
@@ -22,6 +23,42 @@ const execAsync = promisify(exec);
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Stripe configuration - use dummy key if not provided
+const stripeKey = process.env.STRIPE_SECRET_KEY || 'sk_test_dummy_key_for_development_only_replace_with_real_key';
+const stripe = new Stripe(stripeKey, {
+  apiVersion: '2024-12-18.acacia',
+});
+
+// Warn if using dummy key
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn('⚠️  WARNING: Using dummy Stripe key. Set STRIPE_SECRET_KEY in .env for real payments.');
+}
+
+// In-memory store for paid sessions (in production, use a database)
+const paidSessions = new Map();
+
+// Pricing plans configuration
+const PRICING_PLANS = {
+  free: {
+    id: 'free',
+    name: 'Free Plan',
+    price: 0, // Free
+    description: 'Basic transcript and translation - Limited features'
+  },
+  basic: {
+    id: 'basic',
+    name: 'Basic Plan',
+    price: 500, // $5.00 in cents
+    description: 'Standard transcript and translation - Full features'
+  },
+  premium: {
+    id: 'premium',
+    name: 'Premium Plan',
+    price: 1000, // $10.00 in cents
+    description: 'Enhanced transcript and translation with priority processing'
+  }
+};
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -182,6 +219,216 @@ function sendProgress(res, progress, message) {
   res.write(`data: ${JSON.stringify({ progress, message })}\n\n`);
 }
 
+// Get available pricing plans endpoint
+app.get('/api/plans', (req, res) => {
+  res.json({
+    plans: Object.values(PRICING_PLANS).map(plan => ({
+      id: plan.id,
+      name: plan.name,
+      price: plan.price,
+      priceFormatted: plan.price === 0 ? 'Free' : `$${(plan.price / 100).toFixed(2)}`,
+      description: plan.description
+    }))
+  });
+});
+
+// Stripe Checkout Session endpoint
+app.post('/api/create-checkout-session', async (req, res) => {
+  try {
+    const { videoUrl, targetLanguage, planId } = req.body;
+    
+    if (!videoUrl) {
+      return res.status(400).json({ error: 'Video URL is required' });
+    }
+
+    if (!planId) {
+      return res.status(400).json({ error: 'Plan ID is required' });
+    }
+
+    const videoId = extractVideoId(videoUrl);
+    if (!videoId) {
+      return res.status(400).json({ error: 'Invalid YouTube URL' });
+    }
+
+    // Get selected plan
+    const selectedPlan = PRICING_PLANS[planId];
+    if (!selectedPlan) {
+      return res.status(400).json({ error: 'Invalid plan selected' });
+    }
+
+    // Handle free plan - no payment needed
+    if (selectedPlan.price === 0) {
+      // Create a free session ID and mark as paid immediately
+      const freeSessionId = `free_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      paidSessions.set(freeSessionId, {
+        videoUrl,
+        targetLanguage,
+        videoId,
+        planId: selectedPlan.id,
+        planName: selectedPlan.name,
+        paidAt: new Date(),
+        sessionId: freeSessionId,
+        isFree: true
+      });
+      
+      return res.json({ 
+        sessionId: freeSessionId, 
+        url: null, // No redirect needed for free plan
+        isFree: true
+      });
+    }
+
+    // Check if using dummy key for paid plans
+    if (!process.env.STRIPE_SECRET_KEY || stripeKey.includes('dummy')) {
+      return res.status(503).json({ 
+        error: 'Stripe is not configured. Please set STRIPE_SECRET_KEY in .env file.',
+        requiresStripeConfig: true
+      });
+    }
+
+    // Check for environment variable overrides
+    const envPriceId = process.env[`STRIPE_PRICE_ID_${planId.toUpperCase()}`];
+    const priceAmount = selectedPlan.price;
+
+    const sessionParams = {
+      payment_method_types: ['card'],
+      mode: 'payment',
+      success_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/success?session_id={CHECKOUT_SESSION_ID}&videoUrl=${encodeURIComponent(videoUrl)}&targetLanguage=${encodeURIComponent(targetLanguage)}`,
+      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/cancel`,
+      metadata: {
+        videoUrl,
+        targetLanguage,
+        videoId,
+        planId: selectedPlan.id,
+        planName: selectedPlan.name
+      }
+    };
+
+    // Use price ID if configured, otherwise use amount
+    if (envPriceId) {
+      sessionParams.line_items = [{
+        price: envPriceId,
+        quantity: 1,
+      }];
+    } else {
+      sessionParams.line_items = [{
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: `${selectedPlan.name} - YouTube Transcript Translation`,
+            description: `${selectedPlan.description} for video: ${videoId}`,
+          },
+          unit_amount: priceAmount,
+        },
+        quantity: 1,
+      }];
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
+
+    res.json({ sessionId: session.id, url: session.url });
+  } catch (error) {
+    console.error('Stripe checkout error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Stripe Webhook endpoint (for production)
+app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  // Check if using dummy key
+  if (!process.env.STRIPE_SECRET_KEY || stripeKey.includes('dummy')) {
+    return res.status(503).send('Stripe is not configured');
+  }
+
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    console.warn('⚠️  STRIPE_WEBHOOK_SECRET not set, webhook verification disabled');
+    return res.status(400).send('Webhook secret not configured');
+  }
+
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the event
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const { videoUrl, targetLanguage, videoId, planId, planName } = session.metadata;
+    
+    // Mark session as paid
+    paidSessions.set(session.id, {
+      videoUrl,
+      targetLanguage,
+      videoId,
+      planId,
+      planName,
+      paidAt: new Date(),
+      sessionId: session.id
+    });
+
+    console.log(`✅ Payment successful for session ${session.id}, video: ${videoId}, plan: ${planName || planId}`);
+  }
+
+  res.json({ received: true });
+});
+
+// Verify payment endpoint
+app.get('/api/verify-payment/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  
+  // Check in-memory store first
+  if (paidSessions.has(sessionId)) {
+    const paymentInfo = paidSessions.get(sessionId);
+    return res.json({ 
+      paid: true, 
+      ...paymentInfo 
+    });
+  }
+  
+  // If not in memory, check Stripe directly (useful for development or if webhook hasn't fired)
+  try {
+    if (stripe && process.env.STRIPE_SECRET_KEY && !stripeKey.includes('dummy')) {
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      
+      if (session.payment_status === 'paid') {
+        const { videoUrl, targetLanguage, videoId, planId, planName } = session.metadata || {};
+        
+        // Store in memory for future requests
+        paidSessions.set(sessionId, {
+          videoUrl,
+          targetLanguage,
+          videoId,
+          planId,
+          planName,
+          paidAt: new Date(),
+          sessionId: session.id
+        });
+        
+        return res.json({ 
+          paid: true,
+          videoUrl,
+          targetLanguage,
+          videoId,
+          planId,
+          planName,
+          sessionId: session.id
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error verifying payment with Stripe:', error.message);
+  }
+  
+  res.json({ paid: false });
+});
+
 // Get transcript endpoint with SSE progress updates
 app.post('/api/transcript', async (req, res) => {
   let audioPath = null;
@@ -193,9 +440,72 @@ app.post('/api/transcript', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   
   try {
-    const { videoUrl, targetLanguage } = req.body;
+    const { videoUrl, targetLanguage, sessionId } = req.body;
     
-    console.log('Received request:', { videoUrl, targetLanguage });
+    console.log('Received request:', { videoUrl, targetLanguage, sessionId });
+    
+    // Verify payment if payment is enabled
+    const paymentRequired = process.env.PAYMENT_REQUIRED !== 'false';
+    if (paymentRequired) {
+      if (!sessionId) {
+        sendProgress(res, 0, 'Payment required');
+        res.write(`data: ${JSON.stringify({ error: 'Payment required. Please complete payment first.', requiresPayment: true })}\n\n`);
+        res.end();
+        return;
+      }
+      
+      // Check in-memory store first
+      if (!paidSessions.has(sessionId)) {
+        // If not in memory, verify with Stripe directly (useful for development)
+        try {
+          if (stripe && process.env.STRIPE_SECRET_KEY && !stripeKey.includes('dummy')) {
+            const session = await stripe.checkout.sessions.retrieve(sessionId);
+            
+            if (session.payment_status === 'paid') {
+              const { videoUrl: paidVideoUrl, targetLanguage: paidTargetLanguage, videoId: paidVideoId, planId, planName } = session.metadata || {};
+              
+              // Store in memory for future requests
+              paidSessions.set(sessionId, {
+                videoUrl: paidVideoUrl,
+                targetLanguage: paidTargetLanguage,
+                videoId: paidVideoId,
+                planId,
+                planName,
+                paidAt: new Date(),
+                sessionId: session.id
+              });
+              
+              // Continue with verification below
+            } else {
+              sendProgress(res, 0, 'Payment not completed');
+              res.write(`data: ${JSON.stringify({ error: 'Payment not completed. Please complete payment first.', requiresPayment: true })}\n\n`);
+              res.end();
+              return;
+            }
+          } else {
+            sendProgress(res, 0, 'Payment verification failed');
+            res.write(`data: ${JSON.stringify({ error: 'Payment verification failed. Please complete payment first.', requiresPayment: true })}\n\n`);
+            res.end();
+            return;
+          }
+        } catch (stripeError) {
+          console.error('Stripe verification error:', stripeError);
+          sendProgress(res, 0, 'Payment verification failed');
+          res.write(`data: ${JSON.stringify({ error: 'Payment verification failed. Please complete payment first.', requiresPayment: true })}\n\n`);
+          res.end();
+          return;
+        }
+      }
+      
+      const paymentInfo = paidSessions.get(sessionId);
+      // Verify the video URL matches
+      if (paymentInfo.videoUrl !== videoUrl || paymentInfo.targetLanguage !== targetLanguage) {
+        sendProgress(res, 0, 'Payment mismatch');
+        res.write(`data: ${JSON.stringify({ error: 'Payment does not match this request. Please create a new payment session.', requiresPayment: true })}\n\n`);
+        res.end();
+        return;
+      }
+    }
     
     // Extract video ID
     const videoId = extractVideoId(videoUrl);

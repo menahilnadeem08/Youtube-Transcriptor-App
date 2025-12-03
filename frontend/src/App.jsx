@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
+import HomePage from './HomePage';
+import PricingPage from './PricingPage';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -15,6 +17,7 @@ const SUPPORTED_LANGUAGES = [
 ];
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState('home'); // 'home', 'pricing', 'generate'
   const [videoUrl, setVideoUrl] = useState('');
   const [targetLanguage, setTargetLanguage] = useState('es');
   const [loading, setLoading] = useState(false);
@@ -24,6 +27,36 @@ export default function App() {
   const [focusedInput, setFocusedInput] = useState(false);
   const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = connected, false = disconnected
   const [checkingBackend, setCheckingBackend] = useState(true);
+  const [paymentSessionId, setPaymentSessionId] = useState(null);
+  const [processingPayment, setProcessingPayment] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+
+  // Handle plan selection from Pricing page
+  const handlePlanSelect = (planId) => {
+    setSelectedPlan(planId);
+    // Switch to generate tab when plan is selected
+    setActiveTab('generate');
+  };
+
+  // Check for payment success on mount (from redirect)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session_id');
+    const videoUrlParam = urlParams.get('videoUrl');
+    const targetLanguageParam = urlParams.get('targetLanguage');
+    
+    if (sessionId && videoUrlParam && targetLanguageParam) {
+      setPaymentSessionId(sessionId);
+      setVideoUrl(videoUrlParam);
+      setTargetLanguage(targetLanguageParam);
+      // Clean URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+      // Auto-start transcript generation after payment
+      setTimeout(() => {
+        handleSubmit(sessionId);
+      }, 500);
+    }
+  }, []);
 
   // Check backend health on component mount
   useEffect(() => {
@@ -98,7 +131,78 @@ export default function App() {
     return extractVideoId(url) !== null;
   };
 
-  const handleSubmit = () => {
+  const handlePayment = async () => {
+    setError('');
+    setProcessingPayment(true);
+
+    if (!videoUrl.trim()) {
+      setError('Please enter a YouTube URL first');
+      setProcessingPayment(false);
+      return;
+    }
+
+    if (!isValidYouTubeUrl(videoUrl)) {
+      setError('Please enter a valid YouTube URL');
+      setProcessingPayment(false);
+      return;
+    }
+
+    if (!selectedPlan) {
+      setError('Please select a plan');
+      setProcessingPayment(false);
+      return;
+    }
+
+    if (backendConnected === false) {
+      setError('Backend server is not connected. Please ensure the backend is running and try again.');
+      setProcessingPayment(false);
+      return;
+    }
+
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || '/api';
+      const response = await fetch(`${API_URL}/create-checkout-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoUrl: videoUrl,
+          targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name,
+          planId: selectedPlan
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to create payment session');
+      }
+
+      const data = await response.json();
+      
+      // Handle free plan - no redirect needed
+      if (data.isFree && data.sessionId) {
+        setPaymentSessionId(data.sessionId);
+        setProcessingPayment(false);
+        // Auto-start transcript generation for free plan
+        setTimeout(() => {
+          handleSubmit(data.sessionId);
+        }, 500);
+        return;
+      }
+      
+      // Redirect to Stripe Checkout for paid plans
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error('No checkout URL received');
+      }
+    } catch (err) {
+      console.error('Payment error:', err);
+      setError(err.message || 'Failed to initiate payment. Please try again.');
+      setProcessingPayment(false);
+    }
+  };
+
+  const handleSubmit = (sessionIdOverride = null) => {
     setError('');
     setResult(null);
     setProgress(0);
@@ -126,13 +230,17 @@ export default function App() {
     // Use environment variable or default to relative path for production
     const API_URL = import.meta.env.VITE_API_URL || '/api';
     
+    // Use the provided sessionId or the stored one
+    const sessionIdToUse = sessionIdOverride || paymentSessionId;
+    
     // Use fetch with ReadableStream to receive SSE progress updates
     fetch(`${API_URL}/transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         videoUrl: videoUrl,
-        targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name
+        targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name,
+        sessionId: sessionIdToUse
       })
     })
       .then(async (response) => {
@@ -181,7 +289,14 @@ export default function App() {
                   }, 500);
                 } else if (data.error) {
                   hasCompleted = true;
-                  setError(data.error || 'Failed to process video');
+                  const errorMessage = data.error || 'Failed to process video';
+                  setError(errorMessage);
+                  
+                  // If payment is required, show payment button
+                  if (data.requiresPayment) {
+                    setPaymentSessionId(null);
+                  }
+                  
                   setLoading(false);
                   setProgress(0);
                 }
@@ -311,33 +426,154 @@ export default function App() {
     <div style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      padding: '40px 20px',
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
       {/* Loading Overlay with Progress */}
       <LoadingOverlay isVisible={loading} progress={progress} />
 
+      {/* Navigation Tabs */}
       <div style={{
-        maxWidth: '800px',
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        backdropFilter: 'blur(10px)',
+        padding: '0 20px',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.2)'
+      }}>
+        <div style={{
+          maxWidth: '1200px',
+          margin: '0 auto',
+          display: 'flex',
+          gap: '8px',
+          padding: '16px 0'
+        }}>
+          <button
+            onClick={() => setActiveTab('home')}
+            style={{
+              padding: '12px 24px',
+              fontSize: '1rem',
+              fontWeight: '600',
+              color: activeTab === 'home' ? '#667eea' : 'white',
+              backgroundColor: activeTab === 'home' ? 'white' : 'transparent',
+              border: 'none',
+              borderRadius: '10px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => {
+              if (activeTab !== 'home') {
+                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (activeTab !== 'home') {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+          >
+            <Home size={20} />
+            Home
+          </button>
+          <button
+            onClick={() => setActiveTab('pricing')}
+            style={{
+              padding: '12px 24px',
+              fontSize: '1rem',
+              fontWeight: '600',
+              color: activeTab === 'pricing' ? '#667eea' : 'white',
+              backgroundColor: activeTab === 'pricing' ? 'white' : 'transparent',
+              border: 'none',
+              borderRadius: '10px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => {
+              if (activeTab !== 'pricing') {
+                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (activeTab !== 'pricing') {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+          >
+            <DollarSign size={20} />
+            Pricing
+          </button>
+          <button
+            onClick={() => setActiveTab('generate')}
+            style={{
+              padding: '12px 24px',
+              fontSize: '1rem',
+              fontWeight: '600',
+              color: activeTab === 'generate' ? '#667eea' : 'white',
+              backgroundColor: activeTab === 'generate' ? 'white' : 'transparent',
+              border: 'none',
+              borderRadius: '10px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={(e) => {
+              if (activeTab !== 'generate') {
+                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (activeTab !== 'generate') {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+          >
+            <Play size={20} />
+            Generate
+          </button>
+        </div>
+      </div>
+
+      <div style={{
+        padding: '40px 20px',
+        maxWidth: '1200px',
         margin: '0 auto'
       }}>
-        {/* Header */}
-        <div style={{
-          textAlign: 'center',
-          color: 'white',
-          marginBottom: '40px'
-        }}>
-          <h1 style={{
-            fontSize: '2.5rem',
-            fontWeight: 'bold',
-            marginBottom: '10px'
-          }}>
-            🎥 YouTube Transcript Generator
-          </h1>
-          <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
-            Extract and translate YouTube captions instantly
-          </p>
-        </div>
+        {/* Home Tab */}
+        {activeTab === 'home' && <HomePage />}
+
+        {/* Pricing Tab */}
+        {activeTab === 'pricing' && (
+          <PricingPage
+            onPlanSelect={handlePlanSelect}
+            selectedPlan={selectedPlan}
+          />
+        )}
+
+        {/* Generate Tab */}
+        {activeTab === 'generate' && (
+          <div>
+            {/* Header */}
+            <div style={{
+              textAlign: 'center',
+              color: 'white',
+              marginBottom: '40px'
+            }}>
+              <h1 style={{
+                fontSize: '2.5rem',
+                fontWeight: 'bold',
+                marginBottom: '10px'
+              }}>
+                🎥 Generate Transcript
+              </h1>
+              <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
+                Extract and translate YouTube captions instantly
+              </p>
+            </div>
 
         {/* Form */}
         <div style={{
@@ -408,6 +644,23 @@ export default function App() {
             </select>
           </div>
 
+          {/* Plan Selection Reminder */}
+          {!selectedPlan && (
+            <div style={{
+              marginBottom: '24px',
+              padding: '16px',
+              backgroundColor: '#fef3c7',
+              border: '2px solid #fbbf24',
+              borderRadius: '10px',
+              color: '#92400e',
+              textAlign: 'center'
+            }}>
+              <p style={{ margin: 0, fontWeight: '600' }}>
+                💡 Please select a plan from the <strong>Pricing</strong> tab first
+              </p>
+            </div>
+          )}
+
           {/* Backend Connection Status */}
           <div style={{
             marginBottom: '20px',
@@ -454,43 +707,111 @@ export default function App() {
             )}
           </div>
 
-          <button
-            onClick={handleSubmit}
-            disabled={loading || backendConnected === false || checkingBackend}
-            style={{
-              width: '100%',
-              padding: '14px',
-              fontSize: '1.1rem',
-              fontWeight: '600',
-              color: 'white',
-              background: (loading || backendConnected === false || checkingBackend) 
-                ? '#9ca3af' 
-                : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              border: 'none',
-              borderRadius: '10px',
-              cursor: (loading || backendConnected === false || checkingBackend) 
-                ? 'not-allowed' 
-                : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              transition: 'transform 0.2s'
-            }}
-          >
-            {loading ? (
-              <>
-                <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
-                Processing...
-              </>
-            ) : checkingBackend ? (
-              'Checking Connection...'
-            ) : backendConnected === false ? (
-              'Backend Disconnected'
-            ) : (
-              'Generate Transcript'
-            )}
-          </button>
+          {!paymentSessionId ? (
+            <button
+              onClick={handlePayment}
+              disabled={processingPayment || backendConnected === false || checkingBackend}
+              style={{
+                width: '100%',
+                padding: '14px',
+                fontSize: '1.1rem',
+                fontWeight: '600',
+                color: 'white',
+                background: (processingPayment || backendConnected === false || checkingBackend) 
+                  ? '#9ca3af' 
+                  : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                border: 'none',
+                borderRadius: '10px',
+                cursor: (processingPayment || backendConnected === false || checkingBackend) 
+                  ? 'not-allowed' 
+                  : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'transform 0.2s'
+              }}
+            >
+              {processingPayment ? (
+                <>
+                  <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                  Processing Payment...
+                </>
+              ) : checkingBackend ? (
+                'Checking Connection...'
+              ) : backendConnected === false ? (
+                'Backend Disconnected'
+              ) : !selectedPlan ? (
+                'Select a Plan First'
+              ) : selectedPlan === 'free' ? (
+                '🚀 Generate Free Transcript'
+              ) : (
+                `💳 Pay & Generate`
+              )}
+            </button>
+          ) : (
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => handleSubmit()}
+                disabled={loading || backendConnected === false || checkingBackend}
+                style={{
+                  flex: 1,
+                  padding: '14px',
+                  fontSize: '1.1rem',
+                  fontWeight: '600',
+                  color: 'white',
+                  background: (loading || backendConnected === false || checkingBackend) 
+                    ? '#9ca3af' 
+                    : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  border: 'none',
+                  borderRadius: '10px',
+                  cursor: (loading || backendConnected === false || checkingBackend) 
+                    ? 'not-allowed' 
+                    : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  transition: 'transform 0.2s'
+                }}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                    Processing...
+                  </>
+                ) : checkingBackend ? (
+                  'Checking Connection...'
+                ) : backendConnected === false ? (
+                  'Backend Disconnected'
+                ) : (
+                  '✓ Generate Transcript'
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setPaymentSessionId(null);
+                  setResult(null);
+                  setError('');
+                }}
+                style={{
+                  padding: '14px 20px',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  color: '#666',
+                  background: '#f3f4f6',
+                  border: '2px solid #e5e7eb',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s'
+                }}
+                onMouseEnter={(e) => e.target.style.background = '#e5e7eb'}
+                onMouseLeave={(e) => e.target.style.background = '#f3f4f6'}
+              >
+                Reset
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Error Message */}
@@ -663,16 +984,18 @@ export default function App() {
           </div>
         )}
 
-        {/* Footer Note */}
-        <div style={{
-          marginTop: '30px',
-          textAlign: 'center',
-          color: 'white',
-          opacity: 0.8,
-          fontSize: '0.875rem'
-        }}>
-          ✨ Works with videos with captions + AI transcription for videos without captions
-        </div>
+            {/* Footer Note */}
+            <div style={{
+              marginTop: '30px',
+              textAlign: 'center',
+              color: 'white',
+              opacity: 0.8,
+              fontSize: '0.875rem'
+            }}>
+              ✨ Works with videos with captions + AI transcription for videos without captions
+            </div>
+          </div>
+        )}
       </div>
 
       <style>{`
