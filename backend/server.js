@@ -224,7 +224,7 @@ app.post('/api/transcript', async (req, res) => {
     let transcriptionMethod = 'captions';
     
     // Try to get captions first
-    console.log('Fetching transcript...');
+    console.log('📝 Checking for video captions...');
     sendProgress(res, 25, 'Fetching captions...');
     try {
       const transcriptData = await info.getTranscript();
@@ -234,7 +234,9 @@ app.post('/api/transcript', async (req, res) => {
         const transcript = transcriptData.transcript.content.body.initial_segments;
         
         if (transcript && transcript.length > 0) {
-          console.log('Number of transcript segments:', transcript.length);
+          console.log('✅ Video HAS captions available');
+          console.log('📊 Number of transcript segments:', transcript.length);
+          console.log('🔧 Transcription Method: YouTube Captions (No AI model needed)');
           sendProgress(res, 35, 'Processing captions...');
           
           // Combine all transcript text
@@ -244,16 +246,20 @@ app.post('/api/transcript', async (req, res) => {
             .trim();
           
           sendProgress(res, 40, 'Captions extracted successfully');
+        } else {
+          console.log('❌ Video does NOT have captions');
+          console.log('🔧 Will use: OpenAI Whisper-1 model for transcription');
         }
       }
     } catch (captionError) {
-      console.log('Could not fetch captions, will use Whisper API...');
+      console.log('❌ Video does NOT have captions');
+      console.log('🔧 Will use: OpenAI Whisper-1 model for transcription');
       sendProgress(res, 30, 'No captions found, downloading audio...');
     }
     
     // If no captions, use OpenAI Whisper
     if (!originalText || originalText.length === 0) {
-      console.log('No captions found. Attempting Whisper transcription...');
+      console.log('🎤 Starting transcription with OpenAI Whisper-1 model...');
       
       try {
         // Try to download audio using the full YouTube URL
@@ -272,9 +278,12 @@ app.post('/api/transcript', async (req, res) => {
         sendProgress(res, 60, 'Audio downloaded, transcribing...');
         
         // Transcribe with OpenAI Whisper
+        console.log('🤖 Using Model: OpenAI Whisper-1');
         const whisperResult = await transcribeWithWhisper(audioPath);
         originalText = whisperResult.text;
         transcriptionMethod = whisperResult.method; // 'openai'
+        
+        console.log('✅ Transcription completed using OpenAI Whisper-1');
         
         if (!originalText || originalText.length === 0) {
           sendProgress(res, 0, 'Transcription failed');
@@ -298,11 +307,14 @@ app.post('/api/transcript', async (req, res) => {
       }
     }
 
-    console.log('Original text length:', originalText.length);
-    console.log('First 200 chars:', originalText.substring(0, 200));
+    console.log('📄 Original text length:', originalText.length, 'characters');
+    console.log('📝 First 200 chars:', originalText.substring(0, 200));
 
     // Translate with GROQ
-    console.log('Translating to:', targetLanguage);
+    console.log('🌐 Starting translation...');
+    console.log('🤖 Using Model: Groq Llama-3.3-70b-versatile');
+    console.log('🎯 Target Language:', targetLanguage);
+    console.log('⚙️  Translation Config: temperature=0.3, max_tokens=32768');
     sendProgress(res, 80, 'Translating content...');
     const completion = await groq.chat.completions.create({
       messages: [
@@ -318,8 +330,8 @@ app.post('/api/transcript', async (req, res) => {
 
     const translatedText = completion.choices[0].message.content;
     
-    console.log('✅ Translation completed!');
-    console.log('Translation length:', translatedText.length);
+    console.log('✅ Translation completed using Groq Llama-3.3-70b-versatile!');
+    console.log('📄 Translation length:', translatedText.length, 'characters');
     
     sendProgress(res, 95, 'Translation completed, finalizing...');
     
@@ -328,6 +340,18 @@ app.post('/api/transcript', async (req, res) => {
     const readingTime = Math.ceil(wordCount / 200);
 
     sendProgress(res, 100, 'Complete!');
+    
+    // Final summary log
+    console.log('='.repeat(80));
+    console.log('📊 PROCESSING SUMMARY:');
+    console.log('='.repeat(80));
+    console.log('🎥 Video ID:', videoId);
+    console.log('📝 Captions Available:', originalText && transcriptionMethod === 'captions' ? 'YES ✅' : 'NO ❌');
+    console.log('🤖 Transcription Model:', transcriptionMethod === 'captions' ? 'YouTube Captions (No AI)' : 'OpenAI Whisper-1');
+    console.log('🌐 Translation Model: Groq Llama-3.3-70b-versatile');
+    console.log('📄 Word Count:', wordCount);
+    console.log('⏱️  Reading Time:', readingTime, 'minutes');
+    console.log('='.repeat(80));
     
     // Send final result
     res.write(`data: ${JSON.stringify({
