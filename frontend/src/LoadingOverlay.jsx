@@ -103,7 +103,7 @@ const LoadingOverlay = ({ isVisible, progress = 0 }) => {
                 WebkitTextFillColor: 'transparent',
                 backgroundClip: 'text'
               }}>
-                {Math.min(progress, 100)}%
+                {Math.min(progress, 100).toFixed(2)}%
               </div>
             </div>
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText, File } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
@@ -22,32 +22,57 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [focusedInput, setFocusedInput] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = connected, false = disconnected
+  const [checkingBackend, setCheckingBackend] = useState(true);
 
-  // Simulate progress updates during loading
+  // Check backend health on component mount
   useEffect(() => {
-    if (!loading) return;
-
-    const startTime = Date.now();
-    const progressInterval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
+    const checkBackendHealth = async () => {
+      setCheckingBackend(true);
+      const API_URL = import.meta.env.VITE_API_URL || '/api';
       
-      if (elapsed < 5000) {
-        // 0-25% in first 5 seconds (downloading)
-        setProgress(Math.min(25, (elapsed / 5000) * 25));
-      } else if (elapsed < 10000) {
-        // 25-50% in next 5 seconds (processing)
-        setProgress(Math.min(50, 25 + ((elapsed - 5000) / 5000) * 25));
-      } else if (elapsed < 20000) {
-        // 50-75% in next 10 seconds (transcribing)
-        setProgress(Math.min(75, 50 + ((elapsed - 10000) / 10000) * 25));
-      } else {
-        // 75-100% final stage (translating)
-        setProgress(Math.min(100, 75 + ((elapsed - 20000) / 10000) * 25));
+      try {
+        // Create AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+        
+        const response = await fetch(`${API_URL}/health`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === 'ok') {
+            setBackendConnected(true);
+          } else {
+            setBackendConnected(false);
+          }
+        } else {
+          setBackendConnected(false);
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          console.error('Backend health check timed out');
+        } else {
+          console.error('Backend health check failed:', err);
+        }
+        setBackendConnected(false);
+      } finally {
+        setCheckingBackend(false);
       }
-    }, 100);
+    };
 
-    return () => clearInterval(progressInterval);
-  }, [loading]);
+    checkBackendHealth();
+    
+    // Optionally recheck every 30 seconds
+    const healthCheckInterval = setInterval(checkBackendHealth, 30000);
+    
+    return () => clearInterval(healthCheckInterval);
+  }, []);
 
   const extractVideoId = (url) => {
     const patterns = [
@@ -78,6 +103,12 @@ export default function App() {
     setResult(null);
     setProgress(0);
 
+    // Check backend connection before proceeding
+    if (backendConnected === false) {
+      setError('Backend server is not connected. Please ensure the backend is running and try again.');
+      return;
+    }
+
     if (!videoUrl.trim()) {
       setError('Please enter a YouTube URL');
       return;
@@ -89,11 +120,13 @@ export default function App() {
     }
 
     setLoading(true);
-    setProgress(5); // Start at 5%
+    setProgress(0);
+    setError('');
 
     // Use environment variable or default to relative path for production
     const API_URL = import.meta.env.VITE_API_URL || '/api';
     
+    // Use fetch with ReadableStream to receive SSE progress updates
     fetch(`${API_URL}/transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -102,32 +135,75 @@ export default function App() {
         targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name
       })
     })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          setProgress(100); // Complete
-          // Delay closing loader for better UX
-          setTimeout(() => {
-            setResult({
-              original: data.original,
-              translated: data.translated,
-              words: data.wordCount,
-              readingTime: data.readingTime,
-              videoId: data.videoId
-            });
-          }, 500);
-        } else {
-          setError(data.error || 'Failed to process video');
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error('Failed to connect to server');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let hasCompleted = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                
+                if (data.progress !== undefined) {
+                  setProgress(data.progress);
+                }
+                
+                if (data.success) {
+                  // Final result received
+                  hasCompleted = true;
+                  setProgress(100);
+                  setTimeout(() => {
+                    setResult({
+                      original: data.original,
+                      translated: data.translated,
+                      words: data.wordCount,
+                      readingTime: data.readingTime,
+                      videoId: data.videoId
+                    });
+                    setTimeout(() => {
+                      setLoading(false);
+                    }, 500);
+                  }, 500);
+                } else if (data.error) {
+                  hasCompleted = true;
+                  setError(data.error || 'Failed to process video');
+                  setLoading(false);
+                  setProgress(0);
+                }
+              } catch (e) {
+                console.error('Error parsing SSE data:', e);
+              }
+            }
+          }
+        }
+        
+        // Stream ended - if we haven't received success or error, something went wrong
+        if (!hasCompleted) {
+          setError('Connection closed unexpectedly');
+          setLoading(false);
+          setProgress(0);
         }
       })
       .catch(err => {
+        console.error('Error:', err);
         setError('Failed to connect to server. Make sure backend is running.');
-      })
-      .finally(() => {
-        setTimeout(() => {
-          setLoading(false);
-          setProgress(0);
-        }, 1000);
+        setLoading(false);
+        setProgress(0);
       });
   };
 
@@ -332,19 +408,69 @@ export default function App() {
             </select>
           </div>
 
+          {/* Backend Connection Status */}
+          <div style={{
+            marginBottom: '20px',
+            padding: '12px 16px',
+            borderRadius: '10px',
+            backgroundColor: checkingBackend 
+              ? '#fef3c7' 
+              : backendConnected 
+                ? '#d1fae5' 
+                : '#fee2e2',
+            border: `2px solid ${
+              checkingBackend 
+                ? '#fbbf24' 
+                : backendConnected 
+                  ? '#10b981' 
+                  : '#ef4444'
+            }`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '0.9rem'
+          }}>
+            {checkingBackend ? (
+              <>
+                <Loader2 size={18} style={{ animation: 'spin 1s linear infinite', color: '#f59e0b' }} />
+                <span style={{ color: '#92400e', fontWeight: '600' }}>
+                  Checking backend connection...
+                </span>
+              </>
+            ) : backendConnected ? (
+              <>
+                <CheckCircle size={18} style={{ color: '#059669' }} />
+                <span style={{ color: '#065f46', fontWeight: '600' }}>
+                  Backend connected ✓
+                </span>
+              </>
+            ) : (
+              <>
+                <XCircle size={18} style={{ color: '#dc2626' }} />
+                <span style={{ color: '#991b1b', fontWeight: '600' }}>
+                  Backend disconnected - Please ensure backend server is running
+                </span>
+              </>
+            )}
+          </div>
+
           <button
             onClick={handleSubmit}
-            disabled={loading}
+            disabled={loading || backendConnected === false || checkingBackend}
             style={{
               width: '100%',
               padding: '14px',
               fontSize: '1.1rem',
               fontWeight: '600',
               color: 'white',
-              background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              background: (loading || backendConnected === false || checkingBackend) 
+                ? '#9ca3af' 
+                : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
               border: 'none',
               borderRadius: '10px',
-              cursor: loading ? 'not-allowed' : 'pointer',
+              cursor: (loading || backendConnected === false || checkingBackend) 
+                ? 'not-allowed' 
+                : 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -357,6 +483,10 @@ export default function App() {
                 <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
                 Processing...
               </>
+            ) : checkingBackend ? (
+              'Checking Connection...'
+            ) : backendConnected === false ? (
+              'Backend Disconnected'
             ) : (
               'Generate Transcript'
             )}

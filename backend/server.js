@@ -177,9 +177,21 @@ function cleanupTempFile(filePath) {
   }
 }
 
-// Get transcript endpoint
+// Helper function to send progress via SSE
+function sendProgress(res, progress, message) {
+  res.write(`data: ${JSON.stringify({ progress, message })}\n\n`);
+}
+
+// Get transcript endpoint with SSE progress updates
 app.post('/api/transcript', async (req, res) => {
   let audioPath = null;
+  
+  // Set headers for Server-Sent Events
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
   try {
     const { videoUrl, targetLanguage } = req.body;
     
@@ -188,24 +200,32 @@ app.post('/api/transcript', async (req, res) => {
     // Extract video ID
     const videoId = extractVideoId(videoUrl);
     if (!videoId) {
-      return res.status(400).json({ error: 'Invalid YouTube URL' });
+      sendProgress(res, 0, 'Invalid YouTube URL');
+      res.write(`data: ${JSON.stringify({ error: 'Invalid YouTube URL' })}\n\n`);
+      res.end();
+      return;
     }
 
     console.log('Extracted video ID:', videoId);
+    sendProgress(res, 5, 'Initializing...');
 
     // Initialize YouTube client
     console.log('Initializing YouTube client...');
     const youtube = await Innertube.create();
+    sendProgress(res, 10, 'YouTube client initialized');
 
     // Fetch video info and transcript
     console.log('Fetching video info...');
+    sendProgress(res, 15, 'Fetching video information...');
     const info = await youtube.getInfo(videoId);
+    sendProgress(res, 20, 'Video information retrieved');
     
     let originalText = null;
     let transcriptionMethod = 'captions';
     
     // Try to get captions first
     console.log('Fetching transcript...');
+    sendProgress(res, 25, 'Fetching captions...');
     try {
       const transcriptData = await info.getTranscript();
       
@@ -215,16 +235,20 @@ app.post('/api/transcript', async (req, res) => {
         
         if (transcript && transcript.length > 0) {
           console.log('Number of transcript segments:', transcript.length);
+          sendProgress(res, 35, 'Processing captions...');
           
           // Combine all transcript text
           originalText = transcript
             .map(segment => segment.snippet.text)
             .join(' ')
             .trim();
+          
+          sendProgress(res, 40, 'Captions extracted successfully');
         }
       }
     } catch (captionError) {
       console.log('Could not fetch captions, will use Whisper API...');
+      sendProgress(res, 30, 'No captions found, downloading audio...');
     }
     
     // If no captions, use OpenAI Whisper
@@ -233,13 +257,19 @@ app.post('/api/transcript', async (req, res) => {
       
       try {
         // Try to download audio using the full YouTube URL
+        sendProgress(res, 45, 'Downloading audio from YouTube...');
         audioPath = await downloadAudio(videoUrl);
         
         if (!audioPath) {
-          return res.status(400).json({ 
+          sendProgress(res, 0, 'Could not download audio');
+          res.write(`data: ${JSON.stringify({ 
             error: 'Could not download audio from YouTube. The video might be age-restricted, private, or unavailable.' 
-          });
+          })}\n\n`);
+          res.end();
+          return;
         }
+        
+        sendProgress(res, 60, 'Audio downloaded, transcribing...');
         
         // Transcribe with OpenAI Whisper
         const whisperResult = await transcribeWithWhisper(audioPath);
@@ -247,18 +277,24 @@ app.post('/api/transcript', async (req, res) => {
         transcriptionMethod = whisperResult.method; // 'openai'
         
         if (!originalText || originalText.length === 0) {
-          return res.status(400).json({ 
+          sendProgress(res, 0, 'Transcription failed');
+          res.write(`data: ${JSON.stringify({ 
             error: 'Could not extract text from transcription services.' 
-          });
+          })}\n\n`);
+          res.end();
+          return;
         }
+        
+        sendProgress(res, 75, 'Transcription completed');
       } catch (downloadError) {
         console.error('Audio download failed:', downloadError.message);
-        
-        // If audio download fails, provide helpful error to user
-        return res.status(400).json({
+        sendProgress(res, 0, 'Download failed');
+        res.write(`data: ${JSON.stringify({
           error: downloadError.message || 'Could not download audio from YouTube. Please try a video with available captions, or try again in a few moments.',
           hint: 'YouTube may be blocking downloads. Videos with captions work best without audio download.'
-        });
+        })}\n\n`);
+        res.end();
+        return;
       }
     }
 
@@ -267,6 +303,7 @@ app.post('/api/transcript', async (req, res) => {
 
     // Translate with GROQ
     console.log('Translating to:', targetLanguage);
+    sendProgress(res, 80, 'Translating content...');
     const completion = await groq.chat.completions.create({
       messages: [
         {
@@ -284,11 +321,16 @@ app.post('/api/transcript', async (req, res) => {
     console.log('✅ Translation completed!');
     console.log('Translation length:', translatedText.length);
     
+    sendProgress(res, 95, 'Translation completed, finalizing...');
+    
     // Calculate stats
     const wordCount = translatedText.split(/\s+/).length;
     const readingTime = Math.ceil(wordCount / 200);
 
-    res.json({
+    sendProgress(res, 100, 'Complete!');
+    
+    // Send final result
+    res.write(`data: ${JSON.stringify({
       success: true,
       original: originalText,
       translated: translatedText,
@@ -296,13 +338,17 @@ app.post('/api/transcript', async (req, res) => {
       readingTime,
       videoId,
       transcriptionMethod
-    });
+    })}\n\n`);
+    
+    res.end();
 
   } catch (error) {
     console.error('❌ Server error:', error.message);
-    res.status(500).json({ 
+    sendProgress(res, 0, 'Error occurred');
+    res.write(`data: ${JSON.stringify({ 
       error: error.message || 'Failed to process video'
-    });
+    })}\n\n`);
+    res.end();
   } finally {
     // Clean up temporary audio directory (contains downloaded audio files)
     if (audioPath) {
