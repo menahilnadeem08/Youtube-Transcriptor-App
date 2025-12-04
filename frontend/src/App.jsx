@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Languages, FileType } from 'lucide-react';
 import { jsPDF } from 'jspdf';
-import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { Document, Packer, Paragraph } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
 
 const SUPPORTED_LANGUAGES = [
@@ -14,6 +14,7 @@ const SUPPORTED_LANGUAGES = [
   { code: 'ur', name: 'Urdu' },
 ];
 
+
 export default function App() {
   const [videoUrl, setVideoUrl] = useState('');
   const [targetLanguage, setTargetLanguage] = useState('es');
@@ -22,19 +23,19 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [focusedInput, setFocusedInput] = useState(false);
-  const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = connected, false = disconnected
+  const [backendConnected, setBackendConnected] = useState(null);
   const [checkingBackend, setCheckingBackend] = useState(true);
+  const [activeMode, setActiveMode] = useState(null); // 'transcribe' or 'translate'
 
-  // Check backend health on component mount
+  // Check backend health
   useEffect(() => {
     const checkBackendHealth = async () => {
       setCheckingBackend(true);
       const API_URL = import.meta.env.VITE_API_URL || '/api';
       
       try {
-        // Create AbortController for timeout
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
         
         const response = await fetch(`${API_URL}/health`, {
           method: 'GET',
@@ -46,20 +47,11 @@ export default function App() {
         
         if (response.ok) {
           const data = await response.json();
-          if (data.status === 'ok') {
-            setBackendConnected(true);
-          } else {
-            setBackendConnected(false);
-          }
+          setBackendConnected(data.status === 'ok');
         } else {
           setBackendConnected(false);
         }
       } catch (err) {
-        if (err.name === 'AbortError') {
-          console.error('Backend health check timed out');
-        } else {
-          console.error('Backend health check failed:', err);
-        }
         setBackendConnected(false);
       } finally {
         setCheckingBackend(false);
@@ -67,24 +59,16 @@ export default function App() {
     };
 
     checkBackendHealth();
-    
-    // Optionally recheck every 30 seconds
     const healthCheckInterval = setInterval(checkBackendHealth, 30000);
-    
     return () => clearInterval(healthCheckInterval);
   }, []);
 
   const extractVideoId = (url) => {
     const patterns = [
-      // Regular YouTube URLs: youtube.com/watch?v=VIDEO_ID
       /(?:youtube\.com\/watch\?v=)([^&\n?#]+)/,
-      // Short YouTube URLs: youtu.be/VIDEO_ID
       /(?:youtu\.be\/)([^&\n?#]+)/,
-      // YouTube embed URLs: youtube.com/embed/VIDEO_ID
       /(?:youtube\.com\/embed\/)([^&\n?#]+)/,
-      // YouTube Shorts URLs: youtube.com/shorts/VIDEO_ID
       /(?:youtube\.com\/shorts\/)([^&\n?#]+)/,
-      // Direct video ID (11 characters)
       /^([a-zA-Z0-9_-]{11})$/
     ];
     for (const pattern of patterns) {
@@ -98,12 +82,12 @@ export default function App() {
     return extractVideoId(url) !== null;
   };
 
-  const handleSubmit = () => {
+  const handleProcess = (mode) => {
     setError('');
     setResult(null);
     setProgress(0);
+    setActiveMode(mode);
 
-    // Check backend connection before proceeding
     if (backendConnected === false) {
       setError('Backend server is not connected. Please ensure the backend is running and try again.');
       return;
@@ -121,19 +105,21 @@ export default function App() {
 
     setLoading(true);
     setProgress(0);
-    setError('');
 
-    // Use environment variable or default to relative path for production
     const API_URL = import.meta.env.VITE_API_URL || '/api';
+    const endpoint = mode === 'transcribe' ? '/transcribe' : '/translate';
     
-    // Use fetch with ReadableStream to receive SSE progress updates
-    fetch(`${API_URL}/transcript`, {
+    const requestBody = mode === 'transcribe' 
+      ? { videoUrl }
+      : { 
+          videoUrl, 
+          targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name 
+        };
+    
+    fetch(`${API_URL}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        videoUrl: videoUrl,
-        targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name
-      })
+      body: JSON.stringify(requestBody)
     })
       .then(async (response) => {
         if (!response.ok) {
@@ -147,7 +133,6 @@ export default function App() {
 
         while (true) {
           const { done, value } = await reader.read();
-          
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
@@ -164,20 +149,31 @@ export default function App() {
                 }
                 
                 if (data.success) {
-                  // Final result received
                   hasCompleted = true;
                   setProgress(100);
                   setTimeout(() => {
-                    setResult({
-                      original: data.original,
-                      translated: data.translated,
-                      words: data.wordCount,
-                      readingTime: data.readingTime,
-                      videoId: data.videoId
-                    });
-                    setTimeout(() => {
-                      setLoading(false);
-                    }, 500);
+                    if (mode === 'transcribe') {
+                      setResult({
+                        text: data.transcript,
+                        words: data.wordCount,
+                        readingTime: data.readingTime,
+                        videoId: data.videoId,
+                        mode: 'transcribe',
+                        method: data.transcriptionMethod
+                      });
+                    } else {
+                      setResult({
+                        original: data.original,
+                        text: data.translated,
+                        words: data.wordCount,
+                        readingTime: data.readingTime,
+                        videoId: data.videoId,
+                        mode: 'translate',
+                        targetLanguage: data.targetLanguage,
+                        method: data.transcriptionMethod
+                      });
+                    }
+                    setTimeout(() => setLoading(false), 500);
                   }, 500);
                 } else if (data.error) {
                   hasCompleted = true;
@@ -192,7 +188,6 @@ export default function App() {
           }
         }
         
-        // Stream ended - if we haven't received success or error, something went wrong
         if (!hasCompleted) {
           setError('Connection closed unexpectedly');
           setLoading(false);
@@ -207,10 +202,9 @@ export default function App() {
       });
   };
 
-  // Download as TXT
   const downloadTxt = () => {
     const element = document.createElement('a');
-    const file = new Blob([result.translated], { type: 'text/plain' });
+    const file = new Blob([result.text], { type: 'text/plain' });
     element.href = URL.createObjectURL(file);
     element.download = `transcript_${result.videoId}.txt`;
     document.body.appendChild(element);
@@ -218,7 +212,6 @@ export default function App() {
     document.body.removeChild(element);
   };
 
-  // Download as PDF
   const downloadPdf = () => {
     const pdf = new jsPDF({
       orientation: 'portrait',
@@ -231,22 +224,19 @@ export default function App() {
     const margin = 15;
     const maxWidth = pageWidth - 2 * margin;
 
-    // Add title
     pdf.setFontSize(16);
     pdf.text('YouTube Transcript', margin, margin);
 
-    // Add metadata
     pdf.setFontSize(10);
     pdf.text(`Video ID: ${result.videoId}`, margin, margin + 10);
-    pdf.text(`Word Count: ${result.words} | Reading Time: ${result.readingTime} min`, margin, margin + 16);
-    pdf.text(`Generated: ${new Date().toLocaleString()}`, margin, margin + 22);
+    pdf.text(`Mode: ${result.mode === 'transcribe' ? 'Transcription' : 'Translation'}`, margin, margin + 16);
+    pdf.text(`Word Count: ${result.words} | Reading Time: ${result.readingTime} min`, margin, margin + 22);
+    pdf.text(`Generated: ${new Date().toLocaleString()}`, margin, margin + 28);
 
-    // Add content
     pdf.setFontSize(11);
-    const textContent = result.translated;
-    const splitText = pdf.splitTextToSize(textContent, maxWidth);
+    const splitText = pdf.splitTextToSize(result.text, maxWidth);
     
-    let yPosition = margin + 35;
+    let yPosition = margin + 40;
     splitText.forEach((line) => {
       if (yPosition > pageHeight - margin) {
         pdf.addPage();
@@ -259,23 +249,24 @@ export default function App() {
     pdf.save(`transcript_${result.videoId}.pdf`);
   };
 
-  // Download as Word
   const downloadWord = async () => {
     const sections = [];
 
-    // Add title
     sections.push(
       new Paragraph({
         text: 'YouTube Transcript',
-        style: 'Heading1',
+        heading: 'Heading1',
         spacing: { after: 200 }
       })
     );
 
-    // Add metadata
     sections.push(
       new Paragraph({
         text: `Video ID: ${result.videoId}`,
+        spacing: { after: 100 }
+      }),
+      new Paragraph({
+        text: `Mode: ${result.mode === 'transcribe' ? 'Transcription' : 'Translation'}`,
         spacing: { after: 100 }
       }),
       new Paragraph({
@@ -288,11 +279,10 @@ export default function App() {
       })
     );
 
-    // Add content
     sections.push(
       new Paragraph({
-        text: result.translated,
-        spacing: { line: 360, lineRule: 'auto' }
+        text: result.text,
+        spacing: { line: 360 }
       })
     );
 
@@ -314,32 +304,18 @@ export default function App() {
       padding: '40px 20px',
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
-      {/* Loading Overlay with Progress */}
       <LoadingOverlay isVisible={loading} progress={progress} />
 
-      <div style={{
-        maxWidth: '800px',
-        margin: '0 auto'
-      }}>
-        {/* Header */}
-        <div style={{
-          textAlign: 'center',
-          color: 'white',
-          marginBottom: '40px'
-        }}>
-          <h1 style={{
-            fontSize: '2.5rem',
-            fontWeight: 'bold',
-            marginBottom: '10px'
-          }}>
+      <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+        <div style={{ textAlign: 'center', color: 'white', marginBottom: '40px' }}>
+          <h1 style={{ fontSize: '2.5rem', fontWeight: 'bold', marginBottom: '10px' }}>
             🎥 YouTube Transcript Generator
           </h1>
           <p style={{ fontSize: '1.1rem', opacity: 0.9 }}>
-            Extract and translate YouTube captions instantly
+            Extract transcripts or translate them to any language
           </p>
         </div>
 
-        {/* Form */}
         <div style={{
           backgroundColor: 'white',
           borderRadius: '20px',
@@ -359,7 +335,6 @@ export default function App() {
               type="text"
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
               onFocus={() => setFocusedInput(true)}
               onBlur={() => setFocusedInput(false)}
               placeholder="https://www.youtube.com/watch?v=..."
@@ -383,7 +358,7 @@ export default function App() {
               marginBottom: '8px',
               color: '#333'
             }}>
-              Target Language
+              Target Language (for translation)
             </label>
             <select
               value={targetLanguage}
@@ -408,7 +383,6 @@ export default function App() {
             </select>
           </div>
 
-          {/* Backend Connection Status */}
           <div style={{
             marginBottom: '20px',
             padding: '12px 16px',
@@ -454,46 +428,95 @@ export default function App() {
             )}
           </div>
 
-          <button
-            onClick={handleSubmit}
-            disabled={loading || backendConnected === false || checkingBackend}
-            style={{
-              width: '100%',
-              padding: '14px',
-              fontSize: '1.1rem',
-              fontWeight: '600',
-              color: 'white',
-              background: (loading || backendConnected === false || checkingBackend) 
-                ? '#9ca3af' 
-                : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              border: 'none',
-              borderRadius: '10px',
-              cursor: (loading || backendConnected === false || checkingBackend) 
-                ? 'not-allowed' 
-                : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              transition: 'transform 0.2s'
-            }}
-          >
-            {loading ? (
-              <>
-                <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
-                Processing...
-              </>
-            ) : checkingBackend ? (
-              'Checking Connection...'
-            ) : backendConnected === false ? (
-              'Backend Disconnected'
-            ) : (
-              'Generate Transcript'
-            )}
-          </button>
+          {/* Two Buttons: Transcribe and Translate */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '12px'
+          }}>
+            <button
+              onClick={() => handleProcess('transcribe')}
+              disabled={loading || backendConnected === false || checkingBackend}
+              style={{
+                padding: '14px',
+                fontSize: '1rem',
+                fontWeight: '600',
+                color: 'white',
+                background: (loading || backendConnected === false || checkingBackend) 
+                  ? '#9ca3af' 
+                  : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                border: 'none',
+                borderRadius: '10px',
+                cursor: (loading || backendConnected === false || checkingBackend) 
+                  ? 'not-allowed' 
+                  : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'transform 0.2s'
+              }}
+            >
+              {loading && activeMode === 'transcribe' ? (
+                <>
+                  <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <FileType size={20} />
+                  Transcribe
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={() => handleProcess('translate')}
+              disabled={loading || backendConnected === false || checkingBackend}
+              style={{
+                padding: '14px',
+                fontSize: '1rem',
+                fontWeight: '600',
+                color: 'white',
+                background: (loading || backendConnected === false || checkingBackend) 
+                  ? '#9ca3af' 
+                  : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                border: 'none',
+                borderRadius: '10px',
+                cursor: (loading || backendConnected === false || checkingBackend) 
+                  ? 'not-allowed' 
+                  : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'transform 0.2s'
+              }}
+            >
+              {loading && activeMode === 'translate' ? (
+                <>
+                  <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Languages size={20} />
+                  Translate
+                </>
+              )}
+            </button>
+          </div>
+
+          <div style={{
+            marginTop: '12px',
+            fontSize: '0.85rem',
+            color: '#666',
+            textAlign: 'center'
+          }}>
+            💡 <strong>Transcribe</strong>: Get text in original language | <strong>Translate</strong>: Convert to selected language
+          </div>
         </div>
 
-        {/* Error Message */}
         {error && (
           <div style={{
             marginTop: '20px',
@@ -511,7 +534,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Success Result */}
         {result && (
           <div style={{
             marginTop: '30px',
@@ -520,7 +542,6 @@ export default function App() {
             padding: '30px',
             boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
           }}>
-            {/* Stats */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
@@ -557,13 +578,16 @@ export default function App() {
                 borderRadius: '10px',
                 textAlign: 'center'
               }}>
-                <div style={{ fontSize: '1.5rem', margin: '0 auto 8px' }}>✓</div>
+                <div style={{ fontSize: '1.5rem', margin: '0 auto 8px' }}>
+                  {result.mode === 'transcribe' ? '📝' : '🌐'}
+                </div>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#333' }}>Done</div>
-                <div style={{ fontSize: '0.875rem', color: '#666' }}>Translated</div>
+                <div style={{ fontSize: '0.875rem', color: '#666' }}>
+                  {result.mode === 'transcribe' ? 'Transcribed' : 'Translated'}
+                </div>
               </div>
             </div>
 
-            {/* Transcript */}
             <div style={{
               padding: '20px',
               backgroundColor: '#f9fafb',
@@ -574,17 +598,14 @@ export default function App() {
               lineHeight: '1.8',
               color: '#333'
             }}>
-              {result.translated}
+              {result.text}
             </div>
 
-            {/* Download Buttons */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: '10px',
-              marginBottom: '20px'
+              gap: '10px'
             }}>
-              {/* Download TXT */}
               <button
                 onClick={downloadTxt}
                 style={{
@@ -599,18 +620,13 @@ export default function App() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'background 0.2s',
-                  hover: { backgroundColor: '#059669' }
+                  gap: '6px'
                 }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#059669'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = '#10b981'}
               >
                 <FileText size={18} />
                 TXT
               </button>
 
-              {/* Download PDF */}
               <button
                 onClick={downloadPdf}
                 style={{
@@ -625,17 +641,13 @@ export default function App() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'background 0.2s'
+                  gap: '6px'
                 }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#d97706'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = '#f59e0b'}
               >
                 <File size={18} />
                 PDF
               </button>
 
-              {/* Download Word */}
               <button
                 onClick={downloadWord}
                 style={{
@@ -650,11 +662,8 @@ export default function App() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'background 0.2s'
+                  gap: '6px'
                 }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#1d4ed8'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = '#3b82f6'}
               >
                 <Download size={18} />
                 DOCX
@@ -663,7 +672,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Footer Note */}
         <div style={{
           marginTop: '30px',
           textAlign: 'center',
@@ -671,7 +679,7 @@ export default function App() {
           opacity: 0.8,
           fontSize: '0.875rem'
         }}>
-          ✨ Works with videos with captions + AI transcription for videos without captions
+          ✨ Uses captions when available + AI transcription for videos without captions
         </div>
       </div>
 
