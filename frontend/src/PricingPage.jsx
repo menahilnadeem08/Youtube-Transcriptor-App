@@ -5,7 +5,7 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
   const [plans, setPlans] = useState([]);
   const [selectedPlan, setSelectedPlan] = useState(externalSelectedPlan || null);
   const [loadingPlans, setLoadingPlans] = useState(true);
-  const [processingPayment, setProcessingPayment] = useState(false);
+  const [processingPayment, setProcessingPayment] = useState(null);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -49,12 +49,12 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
     
     // For paid plans, initiate payment immediately
     if (plan.price > 0 && onPaymentInitiate) {
-      setProcessingPayment(true);
+      setProcessingPayment(planId);
       try {
         await onPaymentInitiate(planId);
       } catch (error) {
         console.error('Payment initiation failed:', error);
-        setProcessingPayment(false);
+        setProcessingPayment(null);
       }
     } else {
       // For free plan, just select it and switch to generate tab
@@ -316,17 +316,17 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
                   e.stopPropagation();
                   handlePlanSelect(plan.id, plan);
                 }}
-                disabled={processingPayment}
+                disabled={processingPayment === plan.id}
                 style={{
                   width: '100%',
                   padding: '12px',
                   fontSize: '1rem',
                   fontWeight: '600',
                   color: isSelected ? 'white' : '#667eea',
-                  backgroundColor: processingPayment ? '#9ca3af' : (isSelected ? '#667eea' : 'transparent'),
+                  backgroundColor: processingPayment === plan.id ? '#9ca3af' : (isSelected ? '#667eea' : 'transparent'),
                   border: `2px solid #667eea`,
                   borderRadius: '10px',
-                  cursor: processingPayment ? 'not-allowed' : 'pointer',
+                  cursor: processingPayment === plan.id ? 'not-allowed' : 'pointer',
                   transition: 'all 0.2s',
                   display: 'flex',
                   alignItems: 'center',
@@ -334,17 +334,17 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
                   gap: '8px'
                 }}
                 onMouseEnter={(e) => {
-                  if (!isSelected && !processingPayment) {
+                  if (!isSelected && processingPayment !== plan.id) {
                     e.target.style.backgroundColor = '#f0f4ff';
                   }
                 }}
                 onMouseLeave={(e) => {
-                  if (!isSelected && !processingPayment) {
+                  if (!isSelected && processingPayment !== plan.id) {
                     e.target.style.backgroundColor = 'transparent';
                   }
                 }}
               >
-                {processingPayment ? (
+                {processingPayment === plan.id ? (
                   <>
                     <span style={{ 
                       display: 'inline-block',
