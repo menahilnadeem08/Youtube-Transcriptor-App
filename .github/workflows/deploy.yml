@@ -34,12 +34,13 @@ jobs:
             echo "PORT=3000" >> .env
             
             pm2 restart youtube-backend || pm2 start server.js --name youtube-backend
+            pm2 save
             
             # Frontend setup
             cd ../frontend
             npm install
             npm run build
-            pm2 restart youtube-frontend || pm2 serve dist 80 --spa --name youtube-frontend
             
-            pm2 save
+            # Reload nginx to serve new build
+            sudo systemctl reload nginx
 
