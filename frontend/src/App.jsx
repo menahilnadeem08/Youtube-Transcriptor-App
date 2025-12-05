@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play, Languages, FileType } from 'lucide-react';
 import { jsPDF } from 'jspdf';
-import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { Document, Packer, Paragraph } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
 import HomePage from './HomePage';
 import PricingPage from './PricingPage';
@@ -16,6 +16,7 @@ const SUPPORTED_LANGUAGES = [
   { code: 'ur', name: 'Urdu' },
 ];
 
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('home'); // 'home', 'pricing', 'generate'
   const [videoUrl, setVideoUrl] = useState('');
@@ -25,11 +26,12 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [focusedInput, setFocusedInput] = useState(false);
-  const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = connected, false = disconnected
+  const [backendConnected, setBackendConnected] = useState(null);
   const [checkingBackend, setCheckingBackend] = useState(true);
   const [paymentSessionId, setPaymentSessionId] = useState(null);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
+  const [activeMode, setActiveMode] = useState(null); // 'transcribe' or 'translate'
 
   // Handle plan selection from Pricing page
   const handlePlanSelect = (planId, autoSwitch = false) => {
@@ -60,16 +62,15 @@ export default function App() {
     }
   }, []);
 
-  // Check backend health on component mount
+  // Check backend health
   useEffect(() => {
     const checkBackendHealth = async () => {
       setCheckingBackend(true);
       const API_URL = import.meta.env.VITE_API_URL || '/api';
       
       try {
-        // Create AbortController for timeout
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
         
         const response = await fetch(`${API_URL}/health`, {
           method: 'GET',
@@ -81,20 +82,11 @@ export default function App() {
         
         if (response.ok) {
           const data = await response.json();
-          if (data.status === 'ok') {
-            setBackendConnected(true);
-          } else {
-            setBackendConnected(false);
-          }
+          setBackendConnected(data.status === 'ok');
         } else {
           setBackendConnected(false);
         }
       } catch (err) {
-        if (err.name === 'AbortError') {
-          console.error('Backend health check timed out');
-        } else {
-          console.error('Backend health check failed:', err);
-        }
         setBackendConnected(false);
       } finally {
         setCheckingBackend(false);
@@ -102,24 +94,16 @@ export default function App() {
     };
 
     checkBackendHealth();
-    
-    // Optionally recheck every 30 seconds
     const healthCheckInterval = setInterval(checkBackendHealth, 30000);
-    
     return () => clearInterval(healthCheckInterval);
   }, []);
 
   const extractVideoId = (url) => {
     const patterns = [
-      // Regular YouTube URLs: youtube.com/watch?v=VIDEO_ID
       /(?:youtube\.com\/watch\?v=)([^&\n?#]+)/,
-      // Short YouTube URLs: youtu.be/VIDEO_ID
       /(?:youtu\.be\/)([^&\n?#]+)/,
-      // YouTube embed URLs: youtube.com/embed/VIDEO_ID
       /(?:youtube\.com\/embed\/)([^&\n?#]+)/,
-      // YouTube Shorts URLs: youtube.com/shorts/VIDEO_ID
       /(?:youtube\.com\/shorts\/)([^&\n?#]+)/,
-      // Direct video ID (11 characters)
       /^([a-zA-Z0-9_-]{11})$/
     ];
     for (const pattern of patterns) {
@@ -244,12 +228,11 @@ export default function App() {
     }
   };
 
-  const handleSubmit = (sessionIdOverride = null) => {
+  const handleSubmit = (sessionIdOverride = null, modeOverride = null) => {
     setError('');
     setResult(null);
     setProgress(0);
 
-    // Check backend connection before proceeding
     if (backendConnected === false) {
       setError('Backend server is not connected. Please ensure the backend is running and try again.');
       return;
@@ -267,23 +250,31 @@ export default function App() {
 
     setLoading(true);
     setProgress(0);
-    setError('');
 
-    // Use environment variable or default to relative path for production
     const API_URL = import.meta.env.VITE_API_URL || '/api';
     
     // Use the provided sessionId or the stored one
     const sessionIdToUse = sessionIdOverride || paymentSessionId;
     
+    // Determine mode - use override if provided, otherwise based on targetLanguage
+    const mode = modeOverride || (targetLanguage && targetLanguage !== 'en' ? 'translate' : 'transcribe');
+    setActiveMode(mode);
+    
     // Use fetch with ReadableStream to receive SSE progress updates
+    // For transcribe mode, don't send targetLanguage; for translate mode, send it
+    const requestBody = {
+      videoUrl: videoUrl,
+      sessionId: sessionIdToUse
+    };
+    
+    if (mode === 'translate') {
+      requestBody.targetLanguage = SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name;
+    }
+    
     fetch(`${API_URL}/transcript`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        videoUrl: videoUrl,
-        targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name,
-        sessionId: sessionIdToUse
-      })
+      body: JSON.stringify(requestBody)
     })
       .then(async (response) => {
         if (!response.ok) {
@@ -297,7 +288,6 @@ export default function App() {
 
         while (true) {
           const { done, value } = await reader.read();
-          
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
@@ -314,20 +304,33 @@ export default function App() {
                 }
                 
                 if (data.success) {
-                  // Final result received
                   hasCompleted = true;
                   setProgress(100);
                   setTimeout(() => {
-                    setResult({
-                      original: data.original,
-                      translated: data.translated,
-                      words: data.wordCount,
-                      readingTime: data.readingTime,
-                      videoId: data.videoId
-                    });
-                    setTimeout(() => {
-                      setLoading(false);
-                    }, 500);
+                    // Determine mode from data response - if translated exists, it's a translation
+                    const resultMode = data.translated ? 'translate' : 'transcribe';
+                    if (resultMode === 'transcribe') {
+                      setResult({
+                        text: data.transcript || data.original, // Fallback to original if transcript not present
+                        words: data.wordCount,
+                        readingTime: data.readingTime,
+                        videoId: data.videoId,
+                        mode: 'transcribe',
+                        method: data.transcriptionMethod
+                      });
+                    } else {
+                      setResult({
+                        original: data.original,
+                        text: data.translated,
+                        words: data.wordCount,
+                        readingTime: data.readingTime,
+                        videoId: data.videoId,
+                        mode: 'translate',
+                        targetLanguage: data.targetLanguage,
+                        method: data.transcriptionMethod
+                      });
+                    }
+                    setTimeout(() => setLoading(false), 500);
                   }, 500);
                 } else if (data.error) {
                   hasCompleted = true;
@@ -349,7 +352,6 @@ export default function App() {
           }
         }
         
-        // Stream ended - if we haven't received success or error, something went wrong
         if (!hasCompleted) {
           setError('Connection closed unexpectedly');
           setLoading(false);
@@ -364,10 +366,9 @@ export default function App() {
       });
   };
 
-  // Download as TXT
   const downloadTxt = () => {
     const element = document.createElement('a');
-    const file = new Blob([result.translated], { type: 'text/plain' });
+    const file = new Blob([result.text], { type: 'text/plain' });
     element.href = URL.createObjectURL(file);
     element.download = `transcript_${result.videoId}.txt`;
     document.body.appendChild(element);
@@ -375,7 +376,6 @@ export default function App() {
     document.body.removeChild(element);
   };
 
-  // Download as PDF
   const downloadPdf = () => {
     const pdf = new jsPDF({
       orientation: 'portrait',
@@ -388,22 +388,19 @@ export default function App() {
     const margin = 15;
     const maxWidth = pageWidth - 2 * margin;
 
-    // Add title
     pdf.setFontSize(16);
     pdf.text('YouTube Transcript', margin, margin);
 
-    // Add metadata
     pdf.setFontSize(10);
     pdf.text(`Video ID: ${result.videoId}`, margin, margin + 10);
-    pdf.text(`Word Count: ${result.words} | Reading Time: ${result.readingTime} min`, margin, margin + 16);
-    pdf.text(`Generated: ${new Date().toLocaleString()}`, margin, margin + 22);
+    pdf.text(`Mode: ${result.mode === 'transcribe' ? 'Transcription' : 'Translation'}`, margin, margin + 16);
+    pdf.text(`Word Count: ${result.words} | Reading Time: ${result.readingTime} min`, margin, margin + 22);
+    pdf.text(`Generated: ${new Date().toLocaleString()}`, margin, margin + 28);
 
-    // Add content
     pdf.setFontSize(11);
-    const textContent = result.translated;
-    const splitText = pdf.splitTextToSize(textContent, maxWidth);
+    const splitText = pdf.splitTextToSize(result.text, maxWidth);
     
-    let yPosition = margin + 35;
+    let yPosition = margin + 40;
     splitText.forEach((line) => {
       if (yPosition > pageHeight - margin) {
         pdf.addPage();
@@ -416,23 +413,24 @@ export default function App() {
     pdf.save(`transcript_${result.videoId}.pdf`);
   };
 
-  // Download as Word
   const downloadWord = async () => {
     const sections = [];
 
-    // Add title
     sections.push(
       new Paragraph({
         text: 'YouTube Transcript',
-        style: 'Heading1',
+        heading: 'Heading1',
         spacing: { after: 200 }
       })
     );
 
-    // Add metadata
     sections.push(
       new Paragraph({
         text: `Video ID: ${result.videoId}`,
+        spacing: { after: 100 }
+      }),
+      new Paragraph({
+        text: `Mode: ${result.mode === 'transcribe' ? 'Transcription' : 'Translation'}`,
         spacing: { after: 100 }
       }),
       new Paragraph({
@@ -445,11 +443,10 @@ export default function App() {
       })
     );
 
-    // Add content
     sections.push(
       new Paragraph({
-        text: result.translated,
-        spacing: { line: 360, lineRule: 'auto' }
+        text: result.text,
+        spacing: { line: 360 }
       })
     );
 
@@ -470,7 +467,6 @@ export default function App() {
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
-      {/* Loading Overlay with Progress */}
       <LoadingOverlay isVisible={loading} progress={progress} />
 
       {/* Navigation Tabs */}
@@ -618,7 +614,6 @@ export default function App() {
               </p>
             </div>
 
-        {/* Form */}
         <div style={{
           backgroundColor: 'white',
           borderRadius: '20px',
@@ -638,7 +633,6 @@ export default function App() {
               type="text"
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
               onFocus={() => setFocusedInput(true)}
               onBlur={() => setFocusedInput(false)}
               placeholder="https://www.youtube.com/watch?v=..."
@@ -662,7 +656,7 @@ export default function App() {
               marginBottom: '8px',
               color: '#333'
             }}>
-              Target Language
+              Target Language (for translation)
             </label>
             <select
               value={targetLanguage}
@@ -686,23 +680,6 @@ export default function App() {
               ))}
             </select>
           </div>
-
-          {/* Plan Selection Reminder */}
-          {!selectedPlan && (
-            <div style={{
-              marginBottom: '24px',
-              padding: '16px',
-              backgroundColor: '#fef3c7',
-              border: '2px solid #fbbf24',
-              borderRadius: '10px',
-              color: '#92400e',
-              textAlign: 'center'
-            }}>
-              <p style={{ margin: 0, fontWeight: '600' }}>
-                💡 Please select a plan from the <strong>Pricing</strong> tab first
-              </p>
-            </div>
-          )}
 
           {/* Backend Connection Status */}
           <div style={{
@@ -751,56 +728,124 @@ export default function App() {
           </div>
 
           {!paymentSessionId ? (
-            <button
-              onClick={handlePayment}
-              disabled={processingPayment || backendConnected === false || checkingBackend}
-              style={{
-                width: '100%',
-                padding: '14px',
-                fontSize: '1.1rem',
-                fontWeight: '600',
-                color: 'white',
-                background: (processingPayment || backendConnected === false || checkingBackend) 
-                  ? '#9ca3af' 
-                  : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                border: 'none',
-                borderRadius: '10px',
-                cursor: (processingPayment || backendConnected === false || checkingBackend) 
-                  ? 'not-allowed' 
-                  : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                transition: 'transform 0.2s'
-              }}
-            >
-              {processingPayment ? (
-                <>
-                  <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
-                  Processing Payment...
-                </>
-              ) : checkingBackend ? (
-                'Checking Connection...'
-              ) : backendConnected === false ? (
-                'Backend Disconnected'
-              ) : !selectedPlan ? (
-                'Select a Plan First'
-              ) : selectedPlan === 'free' ? (
-                '🚀 Generate Free Transcript'
-              ) : (
-                `💳 Pay & Generate`
-              )}
-            </button>
+            <>
+              {/* Two Buttons: Transcribe and Translate */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '12px',
+                marginBottom: '12px'
+              }}>
+                <button
+                  onClick={() => {
+                    // If no plan selected, use free plan by default
+                    const planToUse = selectedPlan || 'free';
+                    if (planToUse === 'free') {
+                      // For free plan, directly process
+                      handleSubmit(null, 'transcribe');
+                    } else {
+                      // For paid plans, need payment first
+                      handlePayment();
+                    }
+                  }}
+                  disabled={loading || processingPayment || backendConnected === false || checkingBackend}
+                  style={{
+                    padding: '14px',
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: 'white',
+                    background: (loading || processingPayment || backendConnected === false || checkingBackend) 
+                      ? '#9ca3af' 
+                      : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    border: 'none',
+                    borderRadius: '10px',
+                    cursor: (loading || processingPayment || backendConnected === false || checkingBackend) 
+                      ? 'not-allowed' 
+                      : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'transform 0.2s'
+                  }}
+                >
+                  {loading && activeMode === 'transcribe' ? (
+                    <>
+                      <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <FileType size={20} />
+                      Transcribe
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => {
+                    // If no plan selected, use free plan by default
+                    const planToUse = selectedPlan || 'free';
+                    if (planToUse === 'free') {
+                      // For free plan, directly process
+                      handleSubmit(null, 'translate');
+                    } else {
+                      // For paid plans, need payment first
+                      handlePayment();
+                    }
+                  }}
+                  disabled={loading || processingPayment || backendConnected === false || checkingBackend}
+                  style={{
+                    padding: '14px',
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: 'white',
+                    background: (loading || processingPayment || backendConnected === false || checkingBackend) 
+                      ? '#9ca3af' 
+                      : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    border: 'none',
+                    borderRadius: '10px',
+                    cursor: (loading || processingPayment || backendConnected === false || checkingBackend) 
+                      ? 'not-allowed' 
+                      : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'transform 0.2s'
+                  }}
+                >
+                  {loading && activeMode === 'translate' ? (
+                    <>
+                      <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Languages size={20} />
+                      Translate
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div style={{
+                fontSize: '0.85rem',
+                color: '#666',
+                textAlign: 'center'
+              }}>
+                💡 <strong>Transcribe</strong>: Get text in original language | <strong>Translate</strong>: Convert to selected language
+              </div>
+            </>
           ) : (
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
-                onClick={() => handleSubmit()}
+                onClick={() => handleSubmit(null, 'transcribe')}
                 disabled={loading || backendConnected === false || checkingBackend}
                 style={{
                   flex: 1,
                   padding: '14px',
-                  fontSize: '1.1rem',
+                  fontSize: '1rem',
                   fontWeight: '600',
                   color: 'white',
                   background: (loading || backendConnected === false || checkingBackend) 
@@ -818,17 +863,52 @@ export default function App() {
                   transition: 'transform 0.2s'
                 }}
               >
-                {loading ? (
+                {loading && activeMode === 'transcribe' ? (
                   <>
                     <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
                     Processing...
                   </>
-                ) : checkingBackend ? (
-                  'Checking Connection...'
-                ) : backendConnected === false ? (
-                  'Backend Disconnected'
                 ) : (
-                  '✓ Generate Transcript'
+                  <>
+                    <FileType size={20} />
+                    Transcribe
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => handleSubmit(null, 'translate')}
+                disabled={loading || backendConnected === false || checkingBackend}
+                style={{
+                  flex: 1,
+                  padding: '14px',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  color: 'white',
+                  background: (loading || backendConnected === false || checkingBackend) 
+                    ? '#9ca3af' 
+                    : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  border: 'none',
+                  borderRadius: '10px',
+                  cursor: (loading || backendConnected === false || checkingBackend) 
+                    ? 'not-allowed' 
+                    : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  transition: 'transform 0.2s'
+                }}
+              >
+                {loading && activeMode === 'translate' ? (
+                  <>
+                    <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Languages size={20} />
+                    Translate
+                  </>
                 )}
               </button>
               <button
@@ -857,7 +937,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Error Message */}
         {error && (
           <div style={{
             marginTop: '20px',
@@ -875,7 +954,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Success Result */}
         {result && (
           <div style={{
             marginTop: '30px',
@@ -884,7 +962,6 @@ export default function App() {
             padding: '30px',
             boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
           }}>
-            {/* Stats */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
@@ -921,13 +998,16 @@ export default function App() {
                 borderRadius: '10px',
                 textAlign: 'center'
               }}>
-                <div style={{ fontSize: '1.5rem', margin: '0 auto 8px' }}>✓</div>
+                <div style={{ fontSize: '1.5rem', margin: '0 auto 8px' }}>
+                  {result.mode === 'transcribe' ? '📝' : '🌐'}
+                </div>
                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#333' }}>Done</div>
-                <div style={{ fontSize: '0.875rem', color: '#666' }}>Translated</div>
+                <div style={{ fontSize: '0.875rem', color: '#666' }}>
+                  {result.mode === 'transcribe' ? 'Transcribed' : 'Translated'}
+                </div>
               </div>
             </div>
 
-            {/* Transcript */}
             <div style={{
               padding: '20px',
               backgroundColor: '#f9fafb',
@@ -938,17 +1018,14 @@ export default function App() {
               lineHeight: '1.8',
               color: '#333'
             }}>
-              {result.translated}
+              {result.text}
             </div>
 
-            {/* Download Buttons */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: '10px',
-              marginBottom: '20px'
+              gap: '10px'
             }}>
-              {/* Download TXT */}
               <button
                 onClick={downloadTxt}
                 style={{
@@ -963,18 +1040,13 @@ export default function App() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'background 0.2s',
-                  hover: { backgroundColor: '#059669' }
+                  gap: '6px'
                 }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#059669'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = '#10b981'}
               >
                 <FileText size={18} />
                 TXT
               </button>
 
-              {/* Download PDF */}
               <button
                 onClick={downloadPdf}
                 style={{
@@ -989,17 +1061,13 @@ export default function App() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'background 0.2s'
+                  gap: '6px'
                 }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#d97706'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = '#f59e0b'}
               >
                 <File size={18} />
                 PDF
               </button>
 
-              {/* Download Word */}
               <button
                 onClick={downloadWord}
                 style={{
@@ -1014,11 +1082,8 @@ export default function App() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '6px',
-                  transition: 'background 0.2s'
+                  gap: '6px'
                 }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#1d4ed8'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = '#3b82f6'}
               >
                 <Download size={18} />
                 DOCX

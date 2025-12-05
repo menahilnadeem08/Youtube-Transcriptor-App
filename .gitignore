@@ -1,31 +1,33 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-.env
+# Dependencies
 node_modules/
-frontend/node_modules/
-backend/node_modules/
-/node_modules
-temp/
-ARCHITECTURE.md
-dist
-dist-ssr
-*.local
-RENDER_VS_LOCALHOST.txt
+package-lock.json
 
+# Environment variables
+.env
+.env.local
+.env.production
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# Build outputs
+dist/
+frontend/dist/
+*.log
+logs/
+
+# Deployment
+deploy/
+deploy.tar.gz
+
+# OS
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+temp/
+*.tmp
+*.temp

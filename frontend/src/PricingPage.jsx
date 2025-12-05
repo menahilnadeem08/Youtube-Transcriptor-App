@@ -11,19 +11,31 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
     const fetchPlans = async () => {
       try {
         const API_URL = import.meta.env.VITE_API_URL || '/api';
+        console.log('Fetching plans from:', `${API_URL}/plans`);
         const response = await fetch(`${API_URL}/plans`);
+        console.log('Plans response status:', response.status);
+        
         if (response.ok) {
           const data = await response.json();
-          setPlans(data.plans || []);
+          console.log('Plans data received:', data);
+          const plansArray = data.plans || [];
+          console.log('Plans array:', plansArray);
+          setPlans(plansArray);
+          
           // Set default to free plan if available
-          const freePlan = data.plans?.find(p => p.price === 0);
+          const freePlan = plansArray.find(p => p.price === 0);
           if (freePlan && !selectedPlan) {
             setSelectedPlan(freePlan.id);
             if (onPlanSelect) onPlanSelect(freePlan.id);
           }
+        } else {
+          const errorText = await response.text();
+          console.error('Failed to fetch plans - response not ok:', response.status, errorText);
+          setPlans([]);
         }
       } catch (err) {
         console.error('Failed to fetch plans:', err);
+        setPlans([]);
       } finally {
         setLoadingPlans(false);
       }
@@ -122,7 +134,24 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
         maxWidth: '1200px',
         margin: '0 auto'
       }}>
-        {plans.map((plan) => {
+        {plans.length === 0 ? (
+          <div style={{
+            gridColumn: '1 / -1',
+            textAlign: 'center',
+            padding: '40px',
+            backgroundColor: 'white',
+            borderRadius: '20px',
+            color: '#666'
+          }}>
+            <p style={{ fontSize: '1.1rem', marginBottom: '10px' }}>
+              No plans available at the moment.
+            </p>
+            <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>
+              Please check back later or contact support.
+            </p>
+          </div>
+        ) : (
+          plans.map((plan) => {
           const isFree = plan.price === 0;
           const isSelected = selectedPlan === plan.id;
           const features = planFeatures[plan.id] || [];
@@ -130,7 +159,7 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
           return (
             <div
               key={plan.id}
-              onClick={() => handlePlanSelect(plan.id)}
+              onClick={() => handlePlanSelect(plan.id, plan)}
               style={{
                 backgroundColor: 'white',
                 borderRadius: '20px',
@@ -334,7 +363,8 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
               </button>
             </div>
           );
-        })}
+          })
+        )}
       </div>
 
       {/* Note */}

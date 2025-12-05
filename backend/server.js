@@ -19,10 +19,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const execAsync = promisify(exec);
-
 const app = express();
 app.use(cors());
-app.use(express.json());
 
 // Stripe configuration - use dummy key if not provided
 const stripeKey = process.env.STRIPE_SECRET_KEY || 'sk_test_dummy_key_for_development_only_replace_with_real_key';
@@ -38,34 +36,122 @@ if (!process.env.STRIPE_SECRET_KEY) {
 // In-memory store for paid sessions (in production, use a database)
 const paidSessions = new Map();
 
+// Stripe webhook - MUST come before express.json() to get raw body
+app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  let event;
+
+  try {
+    if (webhookSecret) {
+      // Verify webhook signature
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } else {
+      // For development without webhook secret
+      event = JSON.parse(req.body.toString());
+      console.warn('⚠️  Webhook signature verification skipped (no STRIPE_WEBHOOK_SECRET)');
+    }
+
+    console.log('📥 Webhook received:', event.type);
+
+    // Handle the event
+    switch (event.type) {
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        console.log('✅ Checkout session completed:', session.id);
+        console.log('   Customer:', session.customer);
+        console.log('   Subscription:', session.subscription);
+        console.log('   Client Reference ID:', session.client_reference_id);
+        
+        // Update session status in our store
+        if (session.client_reference_id && paidSessions.has(session.client_reference_id)) {
+          const sessionData = paidSessions.get(session.client_reference_id);
+          sessionData.status = 'completed';
+          sessionData.stripeCustomerId = session.customer;
+          sessionData.stripeSubscriptionId = session.subscription;
+          paidSessions.set(session.client_reference_id, sessionData);
+          console.log('✅ Updated session status to completed');
+        }
+        break;
+
+      case 'customer.subscription.created':
+        const subscription = event.data.object;
+        console.log('✅ Subscription created:', subscription.id);
+        console.log('   Customer:', subscription.customer);
+        console.log('   Status:', subscription.status);
+        console.log('   Trial end:', subscription.trial_end ? new Date(subscription.trial_end * 1000) : 'No trial');
+        break;
+
+      case 'customer.subscription.trial_will_end':
+        const trialEndingSub = event.data.object;
+        console.log('⏰ Trial ending soon for subscription:', trialEndingSub.id);
+        console.log('   Trial ends:', new Date(trialEndingSub.trial_end * 1000));
+        break;
+
+      case 'customer.subscription.updated':
+        const updatedSub = event.data.object;
+        console.log('🔄 Subscription updated:', updatedSub.id);
+        console.log('   Status:', updatedSub.status);
+        break;
+
+      case 'customer.subscription.deleted':
+        const deletedSub = event.data.object;
+        console.log('❌ Subscription canceled:', deletedSub.id);
+        break;
+
+      case 'invoice.payment_succeeded':
+        const invoice = event.data.object;
+        console.log('💰 Payment succeeded for invoice:', invoice.id);
+        console.log('   Customer:', invoice.customer);
+        console.log('   Subscription:', invoice.subscription);
+        break;
+
+      case 'invoice.payment_failed':
+        const failedInvoice = event.data.object;
+        console.log('❌ Payment failed for invoice:', failedInvoice.id);
+        console.log('   Customer:', failedInvoice.customer);
+        break;
+
+      default:
+        console.log(`Unhandled event type: ${event.type}`);
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error('❌ Webhook error:', error.message);
+    res.status(400).send(`Webhook Error: ${error.message}`);
+  }
+});
+
+// Apply JSON parsing AFTER webhook endpoint
+app.use(express.json());
+
 // Pricing plans configuration
 const PRICING_PLANS = {
   free: {
     id: 'free',
     name: 'Free Plan',
     price: 0, // Free
-    description: 'Basic transcript and translation - Limited features'
+    description: 'Basic transcript and translation - Limited features',
+    trialDays: 0
   },
   basic: {
     id: 'basic',
     name: 'Basic Plan',
     price: 500, // $5.00 in cents
     description: 'Standard transcript and translation - Full features',
-    paymentLink: 'https://buy.stripe.com/test_28E3cw5tDbS107W0KTc3m01'
+    stripePriceId: process.env.STRIPE_PRICE_ID_BASIC || 'price_basic_placeholder', // Replace with your Stripe Price ID
+    trialDays: 7
   },
   premium: {
     id: 'premium',
     name: 'Premium Plan',
     price: 1000, // $10.00 in cents
     description: 'Enhanced transcript and translation with priority processing',
-    paymentLink: 'https://buy.stripe.com/test_5kQ9AUf4d7BL07WctBc3m00'
+    stripePriceId: process.env.STRIPE_PRICE_ID_PREMIUM || 'price_premium_placeholder', // Replace with your Stripe Price ID
+    trialDays: 10
   }
-};
-
-// Payment Links from Stripe (alternative to dynamic checkout)
-const PAYMENT_LINKS = {
-  premium: process.env.STRIPE_PAYMENT_LINK_PREMIUM || 'https://buy.stripe.com/test_5kQ9AUf4d7BL07WctBc3m00',
-  basic: process.env.STRIPE_PAYMENT_LINK_BASIC || 'https://buy.stripe.com/test_28E3cw5tDbS107W0KTc3m01'
 };
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -82,18 +168,13 @@ if (!fs.existsSync(tempDir)) {
 // Extract video ID from URL
 function extractVideoId(url) {
   const patterns = [
-    // Regular YouTube URLs: youtube.com/watch?v=VIDEO_ID
     /(?:youtube\.com\/watch\?v=)([^&\n?#]+)/,
-    // Short YouTube URLs: youtu.be/VIDEO_ID
     /(?:youtu\.be\/)([^&\n?#]+)/,
-    // YouTube embed URLs: youtube.com/embed/VIDEO_ID
     /(?:youtube\.com\/embed\/)([^&\n?#]+)/,
-    // YouTube Shorts URLs: youtube.com/shorts/VIDEO_ID
     /(?:youtube\.com\/shorts\/)([^&\n?#]+)/,
-    // Direct video ID (11 characters)
     /^([a-zA-Z0-9_-]{11})$/
   ];
-  
+
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match) return match[1];
@@ -101,118 +182,209 @@ function extractVideoId(url) {
   return null;
 }
 
-// Download video audio using yt-dlp (same as main project)
+// Download video audio using yt-dlp
 async function downloadAudio(url, retryCount = 0) {
   const MAX_RETRIES = 3;
-  
   try {
-    console.log(`  📥 Downloading: ${url} (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
-    
+    console.log(` 📥 Downloading: ${url} (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
+
     const outputTemplate = path.join(tempDir, '%(title)s.%(ext)s');
-    
-    // Use yt-dlp - detect OS and use appropriate command
-    // On Linux/EC2: use 'yt-dlp', on Windows: use 'py -m yt_dlp'
     const isWindows = process.platform === 'win32';
     const ytDlpCmd = isWindows ? 'py -m yt_dlp' : 'yt-dlp';
-    const cmd = `${ytDlpCmd} -f bestaudio --no-playlist -o "${outputTemplate}" "${url}" 2>&1`;
-    
-    const { stdout, stderr } = await execAsync(cmd, { 
-      maxBuffer: 50 * 1024 * 1024, // Increased to 50MB
-      timeout: 120000 
-    });
-    
-    if (stderr && stderr.includes('ERROR')) {
-      console.log(`   Debug: ${stderr.substring(0, 150)}`);
+
+    try {
+      await execAsync(`${ytDlpCmd} --version`, { timeout: 5000 });
+    } catch (versionError) {
+      const errorMsg = versionError.message || versionError.toString();
+      console.error(` ✗ yt-dlp not found or not accessible: ${errorMsg}`);
+      throw new Error(`yt-dlp is not installed. Please install it on your server.`);
     }
 
-    // Wait and find the downloaded file
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    const cmd = `${ytDlpCmd} -f bestaudio --no-playlist -o "${outputTemplate}" "${url}" 2>&1`;
+    let stdout = '';
+    let stderr = '';
 
+    try {
+      const result = await execAsync(cmd, {
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: 120000
+      });
+      stdout = result.stdout || '';
+      stderr = result.stderr || '';
+    } catch (execError) {
+      stdout = execError.stdout || '';
+      stderr = execError.stderr || '';
+      console.error(` ✗ yt-dlp execution error:`);
+      console.error(` stdout: ${stdout.substring(0, 500)}`);
+      console.error(` stderr: ${stderr.substring(0, 500)}`);
+    }
+
+    const combinedOutput = (stdout + stderr).toLowerCase();
+    if (combinedOutput.includes('error') || combinedOutput.includes('unavailable') || combinedOutput.includes('private')) {
+      if (combinedOutput.includes('private') || combinedOutput.includes('sign in')) {
+        throw new Error('Video is private or requires sign-in');
+      }
+      if (combinedOutput.includes('unavailable') || combinedOutput.includes('not available')) {
+        throw new Error('Video is unavailable or removed');
+      }
+      if (combinedOutput.includes('age-restricted') || combinedOutput.includes('age restricted')) {
+        throw new Error('Video is age-restricted');
+      }
+      if (combinedOutput.includes('429') || combinedOutput.includes('rate limit')) {
+        throw new Error('YouTube rate limit exceeded. Please try again later.');
+      }
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1500));
     const files = fs.readdirSync(tempDir);
-    console.log(`   Files in temp: ${files.join(', ')}`);
     
-    // Filter for audio files (same as main project)
     const audioFiles = files.filter(f => {
       const ext = path.extname(f).toLowerCase();
       return ['.webm', '.m4a', '.mp3', '.opus', '.aac', '.flac', '.wav', '.mkv', '.f251', '.m4b'].includes(ext);
     });
-    
+
     if (audioFiles.length > 0) {
       const latestFile = audioFiles.sort().reverse()[0];
       const fullPath = path.join(tempDir, latestFile);
       const stats = fs.statSync(fullPath);
-      console.log(`  ✓ Downloaded (${path.extname(latestFile)}, ${(stats.size / 1024 / 1024).toFixed(1)}MB)`);
+      console.log(` ✓ Downloaded (${path.extname(latestFile)}, ${(stats.size / 1024 / 1024).toFixed(1)}MB)`);
       return fullPath;
     }
 
-    console.log(`  ✗ No audio file found - Video might be age-restricted`);
-    
-    // Retry if not found
     if (retryCount < MAX_RETRIES) {
       const delayMs = Math.pow(2, retryCount) * 5000;
       console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
       return downloadAudio(url, retryCount + 1);
     }
-    
-    return null;
+
+    throw new Error('No audio file was downloaded. The video might be age-restricted, private, or unavailable.');
   } catch (error) {
     const errorMsg = error.message || error.toString();
-    console.log(`  ✗ Download failed: ${errorMsg.substring(0, 100)}`);
-    
-    // Check if it's a bot detection error
-    const isBotError = errorMsg.includes('Sign in to confirm') || 
-                       errorMsg.includes('bot') ||
-                       errorMsg.includes('429') ||
-                       errorMsg.includes('403');
-    
-    // Retry with delay if it's a bot detection error and we haven't exceeded max retries
+    console.error(` ✗ Download failed: ${errorMsg}`);
+
+    const isBotError = errorMsg.includes('Sign in to confirm') || errorMsg.includes('bot') || 
+                       errorMsg.includes('429') || errorMsg.includes('403') || 
+                       errorMsg.includes('rate limit');
+
     if (isBotError && retryCount < MAX_RETRIES) {
       const delayMs = Math.pow(2, retryCount) * 5000;
       console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
-      
       await new Promise(resolve => setTimeout(resolve, delayMs));
       return downloadAudio(url, retryCount + 1);
     }
-    
-    return null;
+
+    throw error;
   }
 }
 
-// Transcribe audio using OpenAI Whisper API
-async function transcribeWithWhisper(audioPath) {
+// Transcribe audio using OpenAI Whisper API (auto-detect language)
+async function transcribeWithWhisper(audioPath, retryCount = 0) {
+  const MAX_RETRIES = 3;
   try {
-    console.log('🔵 Attempting: OpenAI Whisper API...');
+    console.log(`🔵 Attempting: OpenAI Whisper API... (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
+
+    if (!fs.existsSync(audioPath)) {
+      throw new Error(`Audio file not found: ${audioPath}`);
+    }
+
+    const stats = fs.statSync(audioPath);
+    const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
+    console.log(` Audio file: ${path.basename(audioPath)} (${fileSizeMB}MB)`);
+
+    if (stats.size > 25 * 1024 * 1024) {
+      throw new Error(`Audio file is too large (${fileSizeMB}MB). OpenAI Whisper limit is 25MB.`);
+    }
+
     const audioStream = fs.createReadStream(audioPath);
     
+    // Auto-detect language by not specifying the language parameter
     const transcription = await openai.audio.transcriptions.create({
       file: audioStream,
-      model: 'whisper-1',
-      language: 'en'
+      model: 'whisper-1'
+      // Language will be auto-detected
     });
-    
+
     if (transcription.text && transcription.text.length > 0) {
-      console.log('✅ OpenAI Whisper transcription completed!');
+      console.log('✅ OpenAI Whisper transcription completed (language auto-detected)!');
       console.log('Transcribed text length:', transcription.text.length);
-      return { text: transcription.text, method: 'openai' };
+      return {
+        text: transcription.text,
+        method: 'openai'
+      };
+    } else {
+      throw new Error('Transcription returned empty text');
     }
   } catch (openaiError) {
-    console.error('❌ OpenAI Whisper failed:', openaiError.message);
-    throw new Error(`Transcription failed: ${openaiError.message}`);
+    const errorMsg = openaiError.message || openaiError.toString();
+    console.error(`❌ OpenAI Whisper failed: ${errorMsg}`);
+
+    const isRetryableError = errorMsg.includes('Connection') || 
+                            errorMsg.includes('ECONNREFUSED') || 
+                            errorMsg.includes('ETIMEDOUT') || 
+                            errorMsg.includes('timeout') || 
+                            errorMsg.includes('network') || 
+                            (openaiError.status >= 500 && openaiError.status < 600);
+
+    if (isRetryableError && retryCount < MAX_RETRIES) {
+      const delayMs = Math.pow(2, retryCount) * 2000;
+      console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      return transcribeWithWhisper(audioPath, retryCount + 1);
+    }
+
+    let errorMessage = 'Transcription failed';
+    if (errorMsg.includes('Connection') || errorMsg.includes('ECONNREFUSED')) {
+      errorMessage = 'Failed to connect to OpenAI API. Please check your internet connection and API key.';
+    } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
+      errorMessage = 'OpenAI API key is invalid or expired. Please check your OPENAI_API_KEY.';
+    } else if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
+      errorMessage = 'OpenAI API rate limit exceeded. Please try again in a few moments.';
+    } else if (errorMsg.includes('too large')) {
+      errorMessage = errorMsg;
+    } else {
+      errorMessage = `Transcription failed: ${errorMsg}`;
+    }
+
+    throw new Error(errorMessage);
   }
+}
+
+// Translate text using Groq
+async function translateWithGroq(text, targetLanguage) {
+  console.log('🌐 Starting translation...');
+  console.log('🤖 Using Model: Groq Llama-3.3-70b-versatile');
+  console.log('🎯 Target Language:', targetLanguage);
+  console.log('⚙️ Translation Config: temperature=0.3, max_tokens=32768');
+
+  const completion = await groq.chat.completions.create({
+    messages: [
+      {
+        role: "user",
+        content: `Translate this text to ${targetLanguage}. Only output the translation, nothing else:\n\n${text}`
+      }
+    ],
+    model: "llama-3.3-70b-versatile",
+    temperature: 0.3,
+    max_tokens: 32768,
+  });
+
+  const translatedText = completion.choices[0].message.content;
+  console.log('✅ Translation completed using Groq Llama-3.3-70b-versatile!');
+  console.log('📄 Translation length:', translatedText.length, 'characters');
+  
+  return translatedText;
 }
 
 // Clean up temporary files and directories
 function cleanupTempFile(filePath) {
   try {
     if (fs.existsSync(filePath)) {
-      // If it's a file, delete it
       const stats = fs.statSync(filePath);
       if (stats.isFile()) {
         fs.unlinkSync(filePath);
         console.log('Cleaned up temp file:', filePath);
       } else if (stats.isDirectory()) {
-        // If it's a directory, delete it and all contents
         fs.rmSync(filePath, { recursive: true, force: true });
         console.log('Cleaned up temp directory:', filePath);
       }
@@ -227,302 +399,19 @@ function sendProgress(res, progress, message) {
   res.write(`data: ${JSON.stringify({ progress, message })}\n\n`);
 }
 
-// Get available pricing plans endpoint
-app.get('/api/plans', (req, res) => {
-  res.json({
-    plans: Object.values(PRICING_PLANS).map(plan => ({
-      id: plan.id,
-      name: plan.name,
-      price: plan.price,
-      priceFormatted: plan.price === 0 ? 'Free' : `$${(plan.price / 100).toFixed(2)}`,
-      description: plan.description
-    }))
-  });
-});
-
-// Stripe Checkout Session endpoint
-app.post('/api/create-checkout-session', async (req, res) => {
-  try {
-    const { videoUrl, targetLanguage, planId } = req.body;
-    
-    if (!videoUrl) {
-      return res.status(400).json({ error: 'Video URL is required' });
-    }
-
-    if (!planId) {
-      return res.status(400).json({ error: 'Plan ID is required' });
-    }
-
-    const videoId = extractVideoId(videoUrl);
-    if (!videoId) {
-      return res.status(400).json({ error: 'Invalid YouTube URL' });
-    }
-
-    // Get selected plan
-    const selectedPlan = PRICING_PLANS[planId];
-    if (!selectedPlan) {
-      return res.status(400).json({ error: 'Invalid plan selected' });
-    }
-
-    // Handle free plan - no payment needed
-    if (selectedPlan.price === 0) {
-      // Create a free session ID and mark as paid immediately
-      const freeSessionId = `free_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      paidSessions.set(freeSessionId, {
-        videoUrl,
-        targetLanguage,
-        videoId,
-        planId: selectedPlan.id,
-        planName: selectedPlan.name,
-        paidAt: new Date(),
-        sessionId: freeSessionId,
-        isFree: true
-      });
-      
-      return res.json({ 
-        sessionId: freeSessionId, 
-        url: null, // No redirect needed for free plan
-        isFree: true
-      });
-    }
-
-    // Check if plan has a direct payment link (from Stripe Payment Links)
-    if (PAYMENT_LINKS[planId]) {
-      console.log(`Using Stripe Payment Link for ${planId}`);
-      return res.json({ 
-        url: PAYMENT_LINKS[planId],
-        usePaymentLink: true
-      });
-    }
-
-    // Check if using dummy key for paid plans
-    if (!process.env.STRIPE_SECRET_KEY || stripeKey.includes('dummy')) {
-      return res.status(503).json({ 
-        error: 'Stripe is not configured. Please set STRIPE_SECRET_KEY in .env file.',
-        requiresStripeConfig: true
-      });
-    }
-
-    // Check for environment variable overrides
-    const envPriceId = process.env[`STRIPE_PRICE_ID_${planId.toUpperCase()}`];
-    const priceAmount = selectedPlan.price;
-
-    const sessionParams = {
-      payment_method_types: ['card'],
-      mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/success?session_id={CHECKOUT_SESSION_ID}&videoUrl=${encodeURIComponent(videoUrl)}&targetLanguage=${encodeURIComponent(targetLanguage)}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/cancel`,
-      metadata: {
-        videoUrl,
-        targetLanguage,
-        videoId,
-        planId: selectedPlan.id,
-        planName: selectedPlan.name
-      }
-    };
-
-    // Use price ID if configured, otherwise use amount
-    if (envPriceId) {
-      sessionParams.line_items = [{
-        price: envPriceId,
-        quantity: 1,
-      }];
-    } else {
-      sessionParams.line_items = [{
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: `${selectedPlan.name} - YouTube Transcript Translation`,
-            description: `${selectedPlan.description} for video: ${videoId}`,
-          },
-          unit_amount: priceAmount,
-        },
-        quantity: 1,
-      }];
-    }
-
-    const session = await stripe.checkout.sessions.create(sessionParams);
-
-    res.json({ sessionId: session.id, url: session.url });
-  } catch (error) {
-    console.error('Stripe checkout error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Stripe Webhook endpoint (for production)
-app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  // Check if using dummy key
-  if (!process.env.STRIPE_SECRET_KEY || stripeKey.includes('dummy')) {
-    return res.status(503).send('Stripe is not configured');
-  }
-
-  const sig = req.headers['stripe-signature'];
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  if (!webhookSecret) {
-    console.warn('⚠️  STRIPE_WEBHOOK_SECRET not set, webhook verification disabled');
-    return res.status(400).send('Webhook secret not configured');
-  }
-
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-  } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  // Handle the event
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    const { videoUrl, targetLanguage, videoId, planId, planName } = session.metadata;
-    
-    // Mark session as paid
-    paidSessions.set(session.id, {
-      videoUrl,
-      targetLanguage,
-      videoId,
-      planId,
-      planName,
-      paidAt: new Date(),
-      sessionId: session.id
-    });
-
-    console.log(`✅ Payment successful for session ${session.id}, video: ${videoId}, plan: ${planName || planId}`);
-  }
-
-  res.json({ received: true });
-});
-
-// Verify payment endpoint
-app.get('/api/verify-payment/:sessionId', async (req, res) => {
-  const { sessionId } = req.params;
-  
-  // Check in-memory store first
-  if (paidSessions.has(sessionId)) {
-    const paymentInfo = paidSessions.get(sessionId);
-    return res.json({ 
-      paid: true, 
-      ...paymentInfo 
-    });
-  }
-  
-  // If not in memory, check Stripe directly (useful for development or if webhook hasn't fired)
-  try {
-    if (stripe && process.env.STRIPE_SECRET_KEY && !stripeKey.includes('dummy')) {
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-      
-      if (session.payment_status === 'paid') {
-        const { videoUrl, targetLanguage, videoId, planId, planName } = session.metadata || {};
-        
-        // Store in memory for future requests
-        paidSessions.set(sessionId, {
-          videoUrl,
-          targetLanguage,
-          videoId,
-          planId,
-          planName,
-          paidAt: new Date(),
-          sessionId: session.id
-        });
-        
-        return res.json({ 
-          paid: true,
-          videoUrl,
-          targetLanguage,
-          videoId,
-          planId,
-          planName,
-          sessionId: session.id
-        });
-      }
-    }
-  } catch (error) {
-    console.error('Error verifying payment with Stripe:', error.message);
-  }
-  
-  res.json({ paid: false });
-});
-
 // Get transcript endpoint with SSE progress updates
 app.post('/api/transcript', async (req, res) => {
   let audioPath = null;
-  
-  // Set headers for Server-Sent Events
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  
+
   try {
-    const { videoUrl, targetLanguage, sessionId } = req.body;
+    const { videoUrl, targetLanguage } = req.body;
     
-    console.log('Received request:', { videoUrl, targetLanguage, sessionId });
-    
-    // Verify payment if payment is enabled
-    const paymentRequired = process.env.PAYMENT_REQUIRED !== 'false';
-    if (paymentRequired) {
-      if (!sessionId) {
-        sendProgress(res, 0, 'Payment required');
-        res.write(`data: ${JSON.stringify({ error: 'Payment required. Please complete payment first.', requiresPayment: true })}\n\n`);
-        res.end();
-        return;
-      }
-      
-      // Check in-memory store first
-      if (!paidSessions.has(sessionId)) {
-        // If not in memory, verify with Stripe directly (useful for development)
-        try {
-          if (stripe && process.env.STRIPE_SECRET_KEY && !stripeKey.includes('dummy')) {
-            const session = await stripe.checkout.sessions.retrieve(sessionId);
-            
-            if (session.payment_status === 'paid') {
-              const { videoUrl: paidVideoUrl, targetLanguage: paidTargetLanguage, videoId: paidVideoId, planId, planName } = session.metadata || {};
-              
-              // Store in memory for future requests
-              paidSessions.set(sessionId, {
-                videoUrl: paidVideoUrl,
-                targetLanguage: paidTargetLanguage,
-                videoId: paidVideoId,
-                planId,
-                planName,
-                paidAt: new Date(),
-                sessionId: session.id
-              });
-              
-              // Continue with verification below
-            } else {
-              sendProgress(res, 0, 'Payment not completed');
-              res.write(`data: ${JSON.stringify({ error: 'Payment not completed. Please complete payment first.', requiresPayment: true })}\n\n`);
-              res.end();
-              return;
-            }
-          } else {
-            sendProgress(res, 0, 'Payment verification failed');
-            res.write(`data: ${JSON.stringify({ error: 'Payment verification failed. Please complete payment first.', requiresPayment: true })}\n\n`);
-            res.end();
-            return;
-          }
-        } catch (stripeError) {
-          console.error('Stripe verification error:', stripeError);
-          sendProgress(res, 0, 'Payment verification failed');
-          res.write(`data: ${JSON.stringify({ error: 'Payment verification failed. Please complete payment first.', requiresPayment: true })}\n\n`);
-          res.end();
-          return;
-        }
-      }
-      
-      const paymentInfo = paidSessions.get(sessionId);
-      // Verify the video URL matches
-      if (paymentInfo.videoUrl !== videoUrl || paymentInfo.targetLanguage !== targetLanguage) {
-        sendProgress(res, 0, 'Payment mismatch');
-        res.write(`data: ${JSON.stringify({ error: 'Payment does not match this request. Please create a new payment session.', requiresPayment: true })}\n\n`);
-        res.end();
-        return;
-      }
-    }
+    console.log('Received request:', { videoUrl, targetLanguage });
     
     // Extract video ID
     const videoId = extractVideoId(videoUrl);
@@ -533,177 +422,121 @@ app.post('/api/transcript', async (req, res) => {
       return;
     }
 
-    console.log('Extracted video ID:', videoId);
-    sendProgress(res, 5, 'Initializing...');
-
-    // Initialize YouTube client
-    console.log('Initializing YouTube client...');
+    sendProgress(res, 5, 'Initializing YouTube client...');
     const youtube = await Innertube.create();
-    sendProgress(res, 10, 'YouTube client initialized');
 
-    // Fetch video info and transcript
-    console.log('Fetching video info...');
-    sendProgress(res, 15, 'Fetching video information...');
+    sendProgress(res, 10, 'Fetching video information...');
     const info = await youtube.getInfo(videoId);
-    sendProgress(res, 20, 'Video information retrieved');
-    
+
     let originalText = null;
     let transcriptionMethod = 'captions';
-    
+
     // Try to get captions first
     console.log('📝 Checking for video captions...');
-    sendProgress(res, 25, 'Fetching captions...');
+    sendProgress(res, 15, 'Checking for captions...');
+
     try {
       const transcriptData = await info.getTranscript();
-      
       if (transcriptData && transcriptData.transcript) {
-        // Extract text from transcript segments
         const transcript = transcriptData.transcript.content.body.initial_segments;
-        
         if (transcript && transcript.length > 0) {
           console.log('✅ Video HAS captions available');
-          console.log('📊 Number of transcript segments:', transcript.length);
-          console.log('🔧 Transcription Method: YouTube Captions (No AI model needed)');
-          sendProgress(res, 35, 'Processing captions...');
-          
-          // Combine all transcript text
+          sendProgress(res, 30, 'Extracting captions...');
+
           originalText = transcript
             .map(segment => segment.snippet.text)
             .join(' ')
             .trim();
-          
+
           sendProgress(res, 40, 'Captions extracted successfully');
-        } else {
-          console.log('❌ Video does NOT have captions');
-          console.log('🔧 Will use: OpenAI Whisper-1 model for transcription');
         }
       }
     } catch (captionError) {
-      console.log('❌ Video does NOT have captions');
-      console.log('🔧 Will use: OpenAI Whisper-1 model for transcription');
-      sendProgress(res, 30, 'No captions found, downloading audio...');
+      console.log('❌ No captions found, will transcribe audio');
     }
-    
-    // If no captions, use OpenAI Whisper
+
+    // If no captions, transcribe with Whisper
     if (!originalText || originalText.length === 0) {
-      console.log('🎤 Starting transcription with OpenAI Whisper-1 model...');
+      console.log('🎤 Starting transcription with OpenAI Whisper (auto-detect language)...');
       
-      try {
-        // Try to download audio using the full YouTube URL
-        sendProgress(res, 45, 'Downloading audio from YouTube...');
-        audioPath = await downloadAudio(videoUrl);
-        
-        if (!audioPath) {
-          sendProgress(res, 0, 'Could not download audio');
-          res.write(`data: ${JSON.stringify({ 
-            error: 'Could not download audio from YouTube. The video might be age-restricted, private, or unavailable.' 
-          })}\n\n`);
-          res.end();
-          return;
-        }
-        
-        sendProgress(res, 60, 'Audio downloaded, transcribing...');
-        
-        // Transcribe with OpenAI Whisper
-        console.log('🤖 Using Model: OpenAI Whisper-1');
-        const whisperResult = await transcribeWithWhisper(audioPath);
-        originalText = whisperResult.text;
-        transcriptionMethod = whisperResult.method; // 'openai'
-        
-        console.log('✅ Transcription completed using OpenAI Whisper-1');
-        
-        if (!originalText || originalText.length === 0) {
-          sendProgress(res, 0, 'Transcription failed');
-          res.write(`data: ${JSON.stringify({ 
-            error: 'Could not extract text from transcription services.' 
-          })}\n\n`);
-          res.end();
-          return;
-        }
-        
-        sendProgress(res, 75, 'Transcription completed');
-      } catch (downloadError) {
-        console.error('Audio download failed:', downloadError.message);
-        sendProgress(res, 0, 'Download failed');
-        res.write(`data: ${JSON.stringify({
-          error: downloadError.message || 'Could not download audio from YouTube. Please try a video with available captions, or try again in a few moments.',
-          hint: 'YouTube may be blocking downloads. Videos with captions work best without audio download.'
-        })}\n\n`);
-        res.end();
-        return;
+      sendProgress(res, 35, 'Downloading audio...');
+      audioPath = await downloadAudio(videoUrl);
+
+      if (!audioPath) {
+        throw new Error('Could not download audio from YouTube');
       }
+
+      sendProgress(res, 50, 'Transcribing audio (auto-detecting language)...');
+      const whisperResult = await transcribeWithWhisper(audioPath);
+      originalText = whisperResult.text;
+      transcriptionMethod = 'openai-whisper';
+
+      sendProgress(res, 65, 'Transcription completed');
     }
 
-    console.log('📄 Original text length:', originalText.length, 'characters');
-    console.log('📝 First 200 chars:', originalText.substring(0, 200));
+    // If targetLanguage is provided, translate; otherwise just return transcript
+    let finalText = originalText;
+    let translatedText = null;
+    
+    if (targetLanguage) {
+      sendProgress(res, 70, `Translating to ${targetLanguage}...`);
+      translatedText = await translateWithGroq(originalText, targetLanguage);
+      finalText = translatedText;
+    } else {
+      sendProgress(res, 70, 'Finalizing transcript...');
+    }
 
-    // Translate with GROQ
-    console.log('🌐 Starting translation...');
-    console.log('🤖 Using Model: Groq Llama-3.3-70b-versatile');
-    console.log('🎯 Target Language:', targetLanguage);
-    console.log('⚙️  Translation Config: temperature=0.3, max_tokens=32768');
-    sendProgress(res, 80, 'Translating content...');
-    const completion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "user",
-          content: `Translate this text to ${targetLanguage}. Only output the translation, nothing else:\n\n${originalText}`
-        }
-      ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.3,
-      max_tokens: 32768, // Increased from 8000 to maximum (32,768 tokens)
-    });
-
-    const translatedText = completion.choices[0].message.content;
-    
-    console.log('✅ Translation completed using Groq Llama-3.3-70b-versatile!');
-    console.log('📄 Translation length:', translatedText.length, 'characters');
-    
-    sendProgress(res, 95, 'Translation completed, finalizing...');
-    
     // Calculate stats
-    const wordCount = translatedText.split(/\s+/).length;
+    const wordCount = finalText.split(/\s+/).length;
     const readingTime = Math.ceil(wordCount / 200);
 
     sendProgress(res, 100, 'Complete!');
-    
-    // Final summary log
+
     console.log('='.repeat(80));
-    console.log('📊 PROCESSING SUMMARY:');
+    console.log(targetLanguage ? '📊 TRANSLATION SUMMARY:' : '📊 TRANSCRIPTION SUMMARY:');
     console.log('='.repeat(80));
     console.log('🎥 Video ID:', videoId);
-    console.log('📝 Captions Available:', originalText && transcriptionMethod === 'captions' ? 'YES ✅' : 'NO ❌');
-    console.log('🤖 Transcription Model:', transcriptionMethod === 'captions' ? 'YouTube Captions (No AI)' : 'OpenAI Whisper-1');
-    console.log('🌐 Translation Model: Groq Llama-3.3-70b-versatile');
+    console.log('📝 Transcription Method:', transcriptionMethod);
+    if (targetLanguage) {
+      console.log('🌐 Translation Target:', targetLanguage);
+    }
     console.log('📄 Word Count:', wordCount);
-    console.log('⏱️  Reading Time:', readingTime, 'minutes');
+    console.log('⏱️ Reading Time:', readingTime, 'minutes');
     console.log('='.repeat(80));
-    
-    // Send final result
-    res.write(`data: ${JSON.stringify({
+
+    const responseData = {
       success: true,
-      original: originalText,
-      translated: translatedText,
       wordCount,
       readingTime,
       videoId,
       transcriptionMethod
-    })}\n\n`);
-    
+    };
+
+    if (targetLanguage) {
+      // Translation mode - return both original and translated
+      responseData.original = originalText;
+      responseData.translated = translatedText;
+      responseData.targetLanguage = targetLanguage;
+    } else {
+      // Transcribe mode - return only transcript
+      responseData.transcript = originalText;
+    }
+
+    res.write(`data: ${JSON.stringify(responseData)}\n\n`);
     res.end();
 
   } catch (error) {
-    console.error('❌ Server error:', error.message);
-    sendProgress(res, 0, 'Error occurred');
-    res.write(`data: ${JSON.stringify({ 
-      error: error.message || 'Failed to process video'
-    })}\n\n`);
-    res.end();
+    console.error('❌ Translation error:', error.message);
+    
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({
+        error: error.message || 'Failed to translate video',
+        hint: 'Check server logs for more details'
+      })}\n\n`);
+      res.end();
+    }
   } finally {
-    // Clean up temporary audio directory (contains downloaded audio files)
     if (audioPath) {
-      // Get the parent directory (videoId folder)
       const audioDir = path.dirname(audioPath);
       cleanupTempFile(audioDir);
     }
@@ -712,7 +545,7 @@ app.post('/api/transcript', async (req, res) => {
 
 app.get('/api/health', (req, res) => {
   console.log(`[HEALTH CHECK] ${new Date().toISOString()}`);
-  res.json({ 
+  res.json({
     status: 'ok',
     service: 'YouTube Transcript Backend',
     timestamp: new Date().toISOString(),
@@ -720,12 +553,176 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.get('/', (req, res) => {
-  res.json({ message: 'YouTube Transcript Backend', status: 'running' });
+// Get pricing plans endpoint
+app.get('/api/plans', (req, res) => {
+  try {
+    // Convert PRICING_PLANS object to array and format for frontend
+    const plans = Object.values(PRICING_PLANS).map(plan => ({
+      id: plan.id,
+      name: plan.name,
+      price: plan.price,
+      priceFormatted: plan.price === 0 ? 'Free' : `$${(plan.price / 100).toFixed(2)}`,
+      description: plan.description
+    }));
+
+    console.log('📋 Returning plans:', plans);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({
+      plans: plans
+    });
+  } catch (error) {
+    console.error('Error fetching plans:', error);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(500).json({
+      error: 'Failed to fetch plans',
+      plans: []
+    });
+  }
 });
+
+// Create Stripe checkout session with subscription
+app.post('/api/create-checkout-session', async (req, res) => {
+  try {
+    const { videoUrl, targetLanguage, planId } = req.body;
+    
+    console.log('💳 Creating checkout session for plan:', planId);
+    
+    const plan = PRICING_PLANS[planId];
+    if (!plan) {
+      return res.status(400).json({ error: 'Invalid plan ID' });
+    }
+
+    // Handle free plan
+    if (plan.price === 0) {
+      const sessionId = `free_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      paidSessions.set(sessionId, {
+        planId: 'free',
+        videoUrl,
+        targetLanguage,
+        timestamp: Date.now()
+      });
+      
+      console.log('✅ Free plan session created:', sessionId);
+      return res.json({
+        isFree: true,
+        sessionId: sessionId
+      });
+    }
+
+    // For paid plans, create Stripe subscription checkout with trial
+    const sessionId = `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Store session info to retrieve after payment
+    paidSessions.set(sessionId, {
+      planId,
+      videoUrl,
+      targetLanguage,
+      timestamp: Date.now(),
+      status: 'pending'
+    });
+
+    // Create Stripe checkout session with subscription mode
+    const checkoutSession = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price: plan.stripePriceId,
+          quantity: 1,
+        },
+      ],
+      subscription_data: {
+        trial_period_days: plan.trialDays,
+        metadata: {
+          planId: planId,
+          videoUrl: videoUrl,
+          targetLanguage: targetLanguage || 'none'
+        }
+      },
+      client_reference_id: sessionId,
+      success_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/?session_id=${sessionId}&videoUrl=${encodeURIComponent(videoUrl)}&targetLanguage=${encodeURIComponent(targetLanguage || 'en')}`,
+      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/?canceled=true`,
+      metadata: {
+        sessionId: sessionId,
+        planId: planId
+      }
+    });
+    
+    console.log(`💳 Subscription checkout created with ${plan.trialDays} days trial:`, checkoutSession.id);
+    
+    res.json({
+      url: checkoutSession.url,
+      sessionId: sessionId,
+      trialDays: plan.trialDays
+    });
+
+  } catch (error) {
+    console.error('Error creating checkout session:', error);
+    res.status(500).json({
+      error: 'Failed to create checkout session',
+      message: error.message
+    });
+  }
+});
+
+// Serve static files from frontend dist directory
+// Try multiple possible paths for flexibility
+const possibleFrontendPaths = [
+  path.join(__dirname, 'frontend-dist'),  // Deployment path
+  path.join(__dirname, '..', 'frontend', 'dist'),  // Development path
+  path.join(__dirname, 'dist')  // Alternative deployment path
+];
+
+let frontendDistPath = null;
+for (const possiblePath of possibleFrontendPaths) {
+  if (fs.existsSync(possiblePath)) {
+    frontendDistPath = possiblePath;
+    break;
+  }
+}
+
+if (frontendDistPath) {
+  console.log(`Serving frontend from: ${frontendDistPath}`);
+  // Serve static files first
+  app.use(express.static(frontendDistPath));
+  
+  // Serve index.html for all non-API routes (SPA routing)
+  // Use app.use() instead of app.get('*') for Express 5 compatibility
+  app.use((req, res, next) => {
+    // Skip API routes - let them be handled by API endpoints
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    // For all other routes, serve index.html (SPA routing)
+    const indexPath = path.join(frontendDistPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      next();
+    }
+  });
+} else {
+  console.log('Frontend dist not found. Serving API only.');
+  // Fallback if frontend is not built yet
+  app.get('/', (req, res) => {
+    res.json({
+      message: 'YouTube Transcript Backend',
+      status: 'running',
+      endpoints: {
+        transcribe: 'POST /api/transcribe - Get transcript in original language',
+        translate: 'POST /api/translate - Get transcript translated to target language'
+      }
+    });
+  });
+}
+
 const PORT = process.env.PORT || 3000;
 
-// Listen on all interfaces (0.0.0.0) for EC2 deployment
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
+  console.log('Available endpoints:');
+  console.log('  - POST /api/transcript (transcribe + translate with SSE)');
+  console.log('  - GET  /api/plans (get pricing plans)');
+  console.log('  - POST /api/create-checkout-session (initiate payment)');
+  console.log('  - GET  /api/health (health check)');
 });
