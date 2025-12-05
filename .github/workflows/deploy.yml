@@ -1,0 +1,45 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/Youtube-Transcriptor-App
+            git pull origin main
+            
+            # Backend setup
+            cd backend
+            npm install --production
+            
+            # Update .env with secrets
+            echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" > .env
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+            echo "PORT=3000" >> .env
+            
+            pm2 restart youtube-backend || pm2 start server.js --name youtube-backend
+            
+            # Frontend setup
+            cd ../frontend
+            npm install
+            npm run build
+            pm2 restart youtube-frontend || pm2 serve dist 80 --spa --name youtube-frontend
+            
+            pm2 save
+
