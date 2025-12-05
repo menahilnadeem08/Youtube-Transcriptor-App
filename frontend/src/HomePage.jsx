@@ -72,7 +72,7 @@ export default function HomePage() {
           marginBottom: '20px',
           textShadow: '2px 2px 4px rgba(0,0,0,0.2)'
         }}>
-          🎥 YouTube Transcript Generator
+          🎥 YouTube Transcript
         </h1>
         <p style={{
           fontSize: '1.3rem',
