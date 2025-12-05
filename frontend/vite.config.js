@@ -18,7 +18,13 @@ export default defineConfig({
         // Configure proxy to handle streaming responses
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, _res) => {
-            console.error('Proxy error:', err.message);
+            if (err.code === 'ECONNREFUSED') {
+              console.error('⚠️  Backend server is not running!');
+              console.error('   Please start the backend server:');
+              console.error('   cd youtube-transcript/backend && npm start');
+            } else {
+              console.error('Proxy error:', err.message);
+            }
           });
         },
       }
