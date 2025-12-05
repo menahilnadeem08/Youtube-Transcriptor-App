@@ -527,16 +527,56 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.get('/', (req, res) => {
-  res.json({
-    message: 'YouTube Transcript Backend',
-    status: 'running',
-    endpoints: {
-      transcribe: 'POST /api/transcribe - Get transcript in original language',
-      translate: 'POST /api/translate - Get transcript translated to target language'
+// Serve static files from frontend dist directory
+// Try multiple possible paths for flexibility
+const possibleFrontendPaths = [
+  path.join(__dirname, 'frontend-dist'),  // Deployment path
+  path.join(__dirname, '..', 'frontend', 'dist'),  // Development path
+  path.join(__dirname, 'dist')  // Alternative deployment path
+];
+
+let frontendDistPath = null;
+for (const possiblePath of possibleFrontendPaths) {
+  if (fs.existsSync(possiblePath)) {
+    frontendDistPath = possiblePath;
+    break;
+  }
+}
+
+if (frontendDistPath) {
+  console.log(`Serving frontend from: ${frontendDistPath}`);
+  // Serve static files first
+  app.use(express.static(frontendDistPath));
+  
+  // Serve index.html for all non-API routes (SPA routing)
+  // Use app.use() instead of app.get('*') for Express 5 compatibility
+  app.use((req, res, next) => {
+    // Skip API routes - let them be handled by API endpoints
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    // For all other routes, serve index.html (SPA routing)
+    const indexPath = path.join(frontendDistPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      next();
     }
   });
-});
+} else {
+  console.log('Frontend dist not found. Serving API only.');
+  // Fallback if frontend is not built yet
+  app.get('/', (req, res) => {
+    res.json({
+      message: 'YouTube Transcript Backend',
+      status: 'running',
+      endpoints: {
+        transcribe: 'POST /api/transcribe - Get transcript in original language',
+        translate: 'POST /api/translate - Get transcript translated to target language'
+      }
+    });
+  });
+}
 
 const PORT = process.env.PORT || 3000;
 
