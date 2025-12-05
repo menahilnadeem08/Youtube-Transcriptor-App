@@ -682,7 +682,7 @@ export default function App() {
           </div>
 
           {/* Backend Connection Status */}
-          <div style={{
+          {/* <div style={{
             marginBottom: '20px',
             padding: '12px 16px',
             borderRadius: '10px',
@@ -725,7 +725,7 @@ export default function App() {
                 </span>
               </>
             )}
-          </div>
+          </div> */}
 
           {!paymentSessionId ? (
             <>
