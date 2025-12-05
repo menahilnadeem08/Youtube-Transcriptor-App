@@ -32,10 +32,12 @@ export default function App() {
   const [selectedPlan, setSelectedPlan] = useState(null);
 
   // Handle plan selection from Pricing page
-  const handlePlanSelect = (planId) => {
+  const handlePlanSelect = (planId, autoSwitch = false) => {
     setSelectedPlan(planId);
-    // Switch to generate tab when plan is selected
-    setActiveTab('generate');
+    // Switch to generate tab only if autoSwitch is true
+    if (autoSwitch) {
+      setActiveTab('generate');
+    }
   };
 
   // Check for payment success on mount (from redirect)
@@ -129,6 +131,46 @@ export default function App() {
 
   const isValidYouTubeUrl = (url) => {
     return extractVideoId(url) !== null;
+  };
+
+  // Handle payment initiation from pricing page (without video URL)
+  const handlePaymentFromPricing = async (planId) => {
+    if (backendConnected === false) {
+      setError('Backend server is not connected. Please ensure the backend is running and try again.');
+      throw new Error('Backend not connected');
+    }
+
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || '/api';
+      // Use a placeholder video URL - user will enter real URL after payment
+      const response = await fetch(`${API_URL}/create-checkout-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', // Placeholder
+          targetLanguage: SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name || 'Spanish',
+          planId: planId
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to create payment session');
+      }
+
+      const data = await response.json();
+      
+      // Redirect to Stripe Checkout for paid plans
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error('No checkout URL received');
+      }
+    } catch (err) {
+      console.error('Payment error:', err);
+      setError(err.message || 'Failed to initiate payment. Please try again.');
+      throw err;
+    }
   };
 
   const handlePayment = async () => {
@@ -551,6 +593,7 @@ export default function App() {
           <PricingPage
             onPlanSelect={handlePlanSelect}
             selectedPlan={selectedPlan}
+            onPaymentInitiate={handlePaymentFromPricing}
           />
         )}
 

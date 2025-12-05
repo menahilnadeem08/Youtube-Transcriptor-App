@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle, Sparkles, Zap } from 'lucide-react';
 
-export default function PricingPage({ onPlanSelect, selectedPlan: externalSelectedPlan }) {
+export default function PricingPage({ onPlanSelect, selectedPlan: externalSelectedPlan, onPaymentInitiate }) {
   const [plans, setPlans] = useState([]);
   const [selectedPlan, setSelectedPlan] = useState(externalSelectedPlan || null);
   const [loadingPlans, setLoadingPlans] = useState(true);
+  const [processingPayment, setProcessingPayment] = useState(false);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -31,10 +32,23 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
     fetchPlans();
   }, []);
 
-  const handlePlanSelect = (planId) => {
+  const handlePlanSelect = async (planId, plan) => {
     setSelectedPlan(planId);
-    if (onPlanSelect) {
-      onPlanSelect(planId);
+    
+    // For paid plans, initiate payment immediately
+    if (plan.price > 0 && onPaymentInitiate) {
+      setProcessingPayment(true);
+      try {
+        await onPaymentInitiate(planId);
+      } catch (error) {
+        console.error('Payment initiation failed:', error);
+        setProcessingPayment(false);
+      }
+    } else {
+      // For free plan, just select it and switch to generate tab
+      if (onPlanSelect) {
+        onPlanSelect(planId, true);
+      }
     }
   };
 
@@ -71,13 +85,20 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
   }
 
   return (
-    <div style={{ padding: '20px 0' }}>
-      {/* Header */}
-      <div style={{
-        textAlign: 'center',
-        color: 'white',
-        marginBottom: '50px'
-      }}>
+    <>
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+      <div style={{ padding: '20px 0' }}>
+        {/* Header */}
+        <div style={{
+          textAlign: 'center',
+          color: 'white',
+          marginBottom: '50px'
+        }}>
         <h1 style={{
           fontSize: '2.5rem',
           fontWeight: 'bold',
@@ -262,30 +283,54 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
 
               {/* Select Button */}
               <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePlanSelect(plan.id, plan);
+                }}
+                disabled={processingPayment}
                 style={{
                   width: '100%',
                   padding: '12px',
                   fontSize: '1rem',
                   fontWeight: '600',
                   color: isSelected ? 'white' : '#667eea',
-                  backgroundColor: isSelected ? '#667eea' : 'transparent',
+                  backgroundColor: processingPayment ? '#9ca3af' : (isSelected ? '#667eea' : 'transparent'),
                   border: `2px solid #667eea`,
                   borderRadius: '10px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
+                  cursor: processingPayment ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px'
                 }}
                 onMouseEnter={(e) => {
-                  if (!isSelected) {
+                  if (!isSelected && !processingPayment) {
                     e.target.style.backgroundColor = '#f0f4ff';
                   }
                 }}
                 onMouseLeave={(e) => {
-                  if (!isSelected) {
+                  if (!isSelected && !processingPayment) {
                     e.target.style.backgroundColor = 'transparent';
                   }
                 }}
               >
-                {isSelected ? '✓ Selected' : isFree ? 'Select Free Plan' : 'Select Plan'}
+                {processingPayment ? (
+                  <>
+                    <span style={{ 
+                      display: 'inline-block',
+                      width: '16px',
+                      height: '16px',
+                      border: '2px solid #fff',
+                      borderTopColor: 'transparent',
+                      borderRadius: '50%',
+                      animation: 'spin 1s linear infinite'
+                    }} />
+                    Processing...
+                  </>
+                ) : (
+                  isFree ? 'Select Free Plan →' : (isSelected ? 'Continue to Payment →' : `Select ${plan.name} →`)
+                )}
               </button>
             </div>
           );
@@ -302,7 +347,8 @@ export default function PricingPage({ onPlanSelect, selectedPlan: externalSelect
       }}>
         💡 All plans include the same core features. Premium plans offer faster processing and additional export formats.
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

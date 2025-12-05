@@ -50,14 +50,22 @@ const PRICING_PLANS = {
     id: 'basic',
     name: 'Basic Plan',
     price: 500, // $5.00 in cents
-    description: 'Standard transcript and translation - Full features'
+    description: 'Standard transcript and translation - Full features',
+    paymentLink: 'https://buy.stripe.com/test_28E3cw5tDbS107W0KTc3m01'
   },
   premium: {
     id: 'premium',
     name: 'Premium Plan',
     price: 1000, // $10.00 in cents
-    description: 'Enhanced transcript and translation with priority processing'
+    description: 'Enhanced transcript and translation with priority processing',
+    paymentLink: 'https://buy.stripe.com/test_5kQ9AUf4d7BL07WctBc3m00'
   }
+};
+
+// Payment Links from Stripe (alternative to dynamic checkout)
+const PAYMENT_LINKS = {
+  premium: process.env.STRIPE_PAYMENT_LINK_PREMIUM || 'https://buy.stripe.com/test_5kQ9AUf4d7BL07WctBc3m00',
+  basic: process.env.STRIPE_PAYMENT_LINK_BASIC || 'https://buy.stripe.com/test_28E3cw5tDbS107W0KTc3m01'
 };
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -275,6 +283,15 @@ app.post('/api/create-checkout-session', async (req, res) => {
         sessionId: freeSessionId, 
         url: null, // No redirect needed for free plan
         isFree: true
+      });
+    }
+
+    // Check if plan has a direct payment link (from Stripe Payment Links)
+    if (PAYMENT_LINKS[planId]) {
+      console.log(`Using Stripe Payment Link for ${planId}`);
+      return res.json({ 
+        url: PAYMENT_LINKS[planId],
+        usePaymentLink: true
       });
     }
 
