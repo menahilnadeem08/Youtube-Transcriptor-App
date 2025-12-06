@@ -22,7 +22,8 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ~/Youtube-Transcriptor-App
-            git pull origin main
+            git fetch origin
+            git reset --hard origin/main
             
             # Backend setup
             cd backend
