@@ -22,6 +22,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ~/Youtube-Transcriptor-App
+            
+            # Ensure HTTPS remote (works without SSH keys)
+            git remote set-url origin https://github.com/menahilnadeem08/Youtube-Transcriptor-App.git
+            
             git fetch origin
             git reset --hard origin/main
             
