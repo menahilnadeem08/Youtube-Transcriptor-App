@@ -949,11 +949,11 @@ export default function App() {
                     padding: '14px',
                     fontSize: '0.95rem',
                     fontWeight: '600',
-                    color: (loading || processingPayment) ? '#9ca3af' : '#6b7280',
+                    color: (loading || processingPayment) ? '#9ca3af' : '#4b5563',
                     background: (loading || processingPayment) 
                       ? '#f3f4f6' 
-                      : 'linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)',
-                    border: '2px solid #e5e7eb',
+                      : 'linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%)',
+                    border: '2px solid #d1d5db',
                     borderRadius: '10px',
                     cursor: (loading || processingPayment) ? 'not-allowed' : 'pointer',
                     display: 'flex',
@@ -978,9 +978,9 @@ export default function App() {
                   }}
                   onMouseLeave={(e) => {
                     if (!loading && !processingPayment) {
-                      e.currentTarget.style.background = 'linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)';
-                      e.currentTarget.style.borderColor = '#e5e7eb';
-                      e.currentTarget.style.color = '#6b7280';
+                      e.currentTarget.style.background = 'linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%)';
+                      e.currentTarget.style.borderColor = '#d1d5db';
+                      e.currentTarget.style.color = '#4b5563';
                       e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1)';
                       e.currentTarget.style.transform = 'translateY(0)';
                     }
