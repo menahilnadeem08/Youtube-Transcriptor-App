@@ -355,21 +355,34 @@ async function translateWithGroq(text, targetLanguage) {
   console.log('🌐 Starting translation...');
   console.log('🤖 Using Model: Groq Llama-3.3-70b-versatile');
   console.log('🎯 Target Language:', targetLanguage);
-  console.log('⚙️ Translation Config: temperature=0.3, max_tokens=32768');
+  console.log('⚙️ Translation Config: temperature=0.33, max_tokens=32768');
+
+  // Enhanced translation prompt for better accuracy with all languages
+  const translationPrompt = `You are a professional translator. Translate the following text to ${targetLanguage}. 
+
+Requirements:
+- Maintain the original meaning and tone
+- Preserve any formatting, punctuation, and structure
+- If the text is already in ${targetLanguage}, return it as-is
+- Only output the translated text, no explanations or additional text
+- Ensure natural, fluent translation in ${targetLanguage}
+
+Text to translate:
+${text}`;
 
   const completion = await groq.chat.completions.create({
     messages: [
       {
         role: "user",
-        content: `Translate this text to ${targetLanguage}. Only output the translation, nothing else:\n\n${text}`
+        content: translationPrompt
       }
     ],
     model: "llama-3.3-70b-versatile",
-    temperature: 0.3,
+    temperature: 0.33,
     max_tokens: 32768,
   });
 
-  const translatedText = completion.choices[0].message.content;
+  const translatedText = completion.choices[0].message.content.trim();
   console.log('✅ Translation completed using Groq Llama-3.3-70b-versatile!');
   console.log('📄 Translation length:', translatedText.length, 'characters');
   
