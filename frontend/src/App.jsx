@@ -5,16 +5,7 @@ import { Document, Packer, Paragraph } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
 import HomePage from './HomePage';
 import PricingPage from './PricingPage';
-
-const SUPPORTED_LANGUAGES = [
-  { code: 'en', name: 'English' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'fr', name: 'French' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'hi', name: 'Hindi' },
-  { code: 'zh', name: 'Chinese' },
-  { code: 'ur', name: 'Urdu' },
-];
+import { SUPPORTED_LANGUAGES } from './languages';
 
 
 export default function App() {
@@ -284,7 +275,7 @@ export default function App() {
     }
   };
 
-  const handleSubmit = (sessionIdOverride = null, modeOverride = null) => {
+  const handleSubmit = (sessionIdOverride = null, modeOverride = null, languageCodeOverride = null) => {
     setError('');
     setResult(null);
     setProgress(0);
@@ -312,8 +303,11 @@ export default function App() {
     // Use the provided sessionId or the stored one
     const sessionIdToUse = sessionIdOverride || paymentSessionId;
     
+    // Use the provided language code or the current state
+    const languageToUse = languageCodeOverride || targetLanguage;
+    
     // Determine mode - use override if provided, otherwise based on targetLanguage
-    const mode = modeOverride || (targetLanguage && targetLanguage !== 'en' ? 'translate' : 'transcribe');
+    const mode = modeOverride || (languageToUse && languageToUse !== 'en' ? 'translate' : 'transcribe');
     setActiveMode(mode);
     
     // Use fetch with ReadableStream to receive SSE progress updates
@@ -324,7 +318,10 @@ export default function App() {
     };
     
     if (mode === 'translate') {
-      requestBody.targetLanguage = SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage)?.name;
+      const languageName = SUPPORTED_LANGUAGES.find(l => l.code === languageToUse)?.name;
+      if (languageName) {
+        requestBody.targetLanguage = languageName;
+      }
     }
     
     fetch(`${API_URL}/transcript`, {
@@ -1028,11 +1025,12 @@ export default function App() {
                   <select
                     value={targetLanguage}
                     onChange={(e) => {
-                      setTargetLanguage(e.target.value);
+                      const selectedLangCode = e.target.value;
+                      setTargetLanguage(selectedLangCode);
                       // Automatically trigger translation when language is selected
                       const planToUse = selectedPlan || 'free';
                       if (planToUse === 'free') {
-                        handleSubmit(null, 'translate');
+                        handleSubmit(null, 'translate', selectedLangCode);
                       } else {
                         handlePayment();
                       }
@@ -1194,9 +1192,10 @@ export default function App() {
                   <select
                     value={targetLanguage}
                     onChange={(e) => {
-                      setTargetLanguage(e.target.value);
+                      const selectedLangCode = e.target.value;
+                      setTargetLanguage(selectedLangCode);
                       // Automatically trigger translation when language is selected
-                      handleSubmit(null, 'translate');
+                      handleSubmit(null, 'translate', selectedLangCode);
                     }}
                     style={{
                       width: '100%',
