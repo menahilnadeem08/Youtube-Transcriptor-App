@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "YouTube Transcript",
+    "slug": "youtube-transcript",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#667eea",
+      "resizeMode": "contain"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.youtubetranscript.app",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSExceptionDomains": {
+            "18.217.107.170": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": true
+            }
+          }
+        }
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#667eea"
+      },
+      "package": "com.youtubetranscript.app"
+    },
+    "web": {},
+    "extra": {
+      "eas": {
+        "projectId": "66cbab9d-7260-40af-8c80-c0f6ed2b1303"
+      }
+    },
+    "plugins": [
+      "expo-font",
+      "./plugins/withAndroidCleartextTraffic"
+    ]
+  }
+}
