@@ -37,6 +37,7 @@ export default function App() {
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
   const [matchIndices, setMatchIndices] = useState([]);
   const textContainerRef = React.useRef(null);
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
 
   // Handle plan selection from Pricing page
   const handlePlanSelect = (planId, autoSwitch = false) => {
@@ -109,6 +110,7 @@ export default function App() {
     setSearchQuery('');
     setCurrentMatchIndex(-1);
     setMatchIndices([]);
+    setShowLanguageSelector(false);
   }, [result]);
 
   // Find matches when search query changes
@@ -783,37 +785,6 @@ export default function App() {
             />
           </div>
 
-          <div style={{ marginBottom: '24px' }}>
-            <label style={{
-              display: 'block',
-              fontWeight: '600',
-              marginBottom: '8px',
-              color: '#333'
-            }}>
-              Target Language (for translation)
-            </label>
-            <select
-              value={targetLanguage}
-              onChange={(e) => setTargetLanguage(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '12px 16px',
-                fontSize: '1rem',
-                border: '2px solid #e0e0e0',
-                borderRadius: '10px',
-                outline: 'none',
-                backgroundColor: 'white',
-                cursor: 'pointer',
-                boxSizing: 'border-box'
-              }}
-            >
-              {SUPPORTED_LANGUAGES.map(lang => (
-                <option key={lang.code} value={lang.code}>
-                  {lang.name}
-                </option>
-              ))}
-            </select>
-          </div>
 
           {/* Backend Connection Status */}
           {/* <div style={{
@@ -872,6 +843,7 @@ export default function App() {
               }}>
                 <button
                   onClick={() => {
+                    setShowLanguageSelector(false);
                     // If no plan selected, use free plan by default
                     const planToUse = selectedPlan || 'free';
                     if (planToUse === 'free') {
@@ -918,15 +890,8 @@ export default function App() {
 
                 <button
                   onClick={() => {
-                    // If no plan selected, use free plan by default
-                    const planToUse = selectedPlan || 'free';
-                    if (planToUse === 'free') {
-                      // For free plan, directly process
-                      handleSubmit(null, 'translate');
-                    } else {
-                      // For paid plans, need payment first
-                      handlePayment();
-                    }
+                    // Show language selector when translate is clicked
+                    setShowLanguageSelector(true);
                   }}
                   disabled={loading || processingPayment || backendConnected === false || checkingBackend}
                   style={{
@@ -936,7 +901,9 @@ export default function App() {
                     color: 'white',
                     background: (loading || processingPayment || backendConnected === false || checkingBackend) 
                       ? '#9ca3af' 
-                      : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      : showLanguageSelector
+                        ? 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)'
+                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                     border: 'none',
                     borderRadius: '10px',
                     cursor: (loading || processingPayment || backendConnected === false || checkingBackend) 
@@ -963,6 +930,57 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Language Selector - Only shown when translation is needed, appears below buttons */}
+              {showLanguageSelector && (
+                <div style={{ 
+                  marginBottom: '12px',
+                  padding: '16px',
+                  backgroundColor: '#f0f4ff',
+                  borderRadius: '10px',
+                  border: '2px solid #667eea'
+                }}>
+                  <label style={{
+                    display: 'block',
+                    fontWeight: '600',
+                    marginBottom: '8px',
+                    color: '#333',
+                    fontSize: '0.9rem'
+                  }}>
+                    Select Target Language
+                  </label>
+                  <select
+                    value={targetLanguage}
+                    onChange={(e) => {
+                      setTargetLanguage(e.target.value);
+                      // Automatically trigger translation when language is selected
+                      const planToUse = selectedPlan || 'free';
+                      if (planToUse === 'free') {
+                        handleSubmit(null, 'translate');
+                      } else {
+                        handlePayment();
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '1rem',
+                      border: '2px solid #667eea',
+                      borderRadius: '8px',
+                      outline: 'none',
+                      backgroundColor: 'white',
+                      cursor: 'pointer',
+                      boxSizing: 'border-box'
+                    }}
+                  >
+                    {SUPPORTED_LANGUAGES.map(lang => (
+                      <option key={lang.code} value={lang.code}>
+                        {lang.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div style={{
                 fontSize: '0.85rem',
                 color: '#666',
@@ -972,123 +990,179 @@ export default function App() {
               </div>
             </>
           ) : (
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                onClick={() => handleSubmit(null, 'transcribe')}
-                disabled={loading || backendConnected === false || checkingBackend}
-                style={{
-                  flex: 1,
-                  padding: '14px',
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  color: 'white',
-                  background: (loading || backendConnected === false || checkingBackend) 
-                    ? '#9ca3af' 
-                    : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                  border: 'none',
+            <>
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+                <button
+                  onClick={() => {
+                    setShowLanguageSelector(false);
+                    handleSubmit(null, 'transcribe');
+                  }}
+                  disabled={loading || backendConnected === false || checkingBackend}
+                  style={{
+                    flex: 1,
+                    padding: '14px',
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: 'white',
+                    background: (loading || backendConnected === false || checkingBackend) 
+                      ? '#9ca3af' 
+                      : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    border: 'none',
+                    borderRadius: '10px',
+                    cursor: (loading || backendConnected === false || checkingBackend) 
+                      ? 'not-allowed' 
+                      : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'transform 0.2s'
+                  }}
+                >
+                  {loading && activeMode === 'transcribe' ? (
+                    <>
+                      <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <FileType size={20} />
+                      Transcribe
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowLanguageSelector(true);
+                  }}
+                  disabled={loading || backendConnected === false || checkingBackend}
+                  style={{
+                    flex: 1,
+                    padding: '14px',
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: 'white',
+                    background: (loading || backendConnected === false || checkingBackend) 
+                      ? '#9ca3af' 
+                      : showLanguageSelector
+                        ? 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)'
+                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    border: 'none',
+                    borderRadius: '10px',
+                    cursor: (loading || backendConnected === false || checkingBackend) 
+                      ? 'not-allowed' 
+                      : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'transform 0.2s'
+                  }}
+                >
+                  {loading && activeMode === 'translate' ? (
+                    <>
+                      <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Languages size={20} />
+                      Translate
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    setPaymentSessionId(null);
+                    setResult(null);
+                    setError('');
+                    setShowLanguageSelector(false);
+                  }}
+                  style={{
+                    padding: '14px 20px',
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: '#666',
+                    background: '#f3f4f6',
+                    border: '2px solid #e5e7eb',
+                    borderRadius: '10px',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseEnter={(e) => e.target.style.background = '#e5e7eb'}
+                  onMouseLeave={(e) => e.target.style.background = '#f3f4f6'}
+                >
+                  Reset
+                </button>
+              </div>
+
+              {/* Language Selector - Only shown when translation is needed, appears below buttons */}
+              {showLanguageSelector && (
+                <div style={{ 
+                  marginBottom: '12px',
+                  padding: '16px',
+                  backgroundColor: '#f0f4ff',
                   borderRadius: '10px',
-                  cursor: (loading || backendConnected === false || checkingBackend) 
-                    ? 'not-allowed' 
-                    : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  transition: 'transform 0.2s'
-                }}
-              >
-                {loading && activeMode === 'transcribe' ? (
-                  <>
-                    <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <FileType size={20} />
-                    Transcribe
-                  </>
-                )}
-              </button>
-              <button
-                onClick={() => handleSubmit(null, 'translate')}
-                disabled={loading || backendConnected === false || checkingBackend}
-                style={{
-                  flex: 1,
-                  padding: '14px',
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  color: 'white',
-                  background: (loading || backendConnected === false || checkingBackend) 
-                    ? '#9ca3af' 
-                    : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  border: 'none',
-                  borderRadius: '10px',
-                  cursor: (loading || backendConnected === false || checkingBackend) 
-                    ? 'not-allowed' 
-                    : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  transition: 'transform 0.2s'
-                }}
-              >
-                {loading && activeMode === 'translate' ? (
-                  <>
-                    <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <Languages size={20} />
-                    Translate
-                  </>
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  setPaymentSessionId(null);
-                  setResult(null);
-                  setError('');
-                }}
-                style={{
-                  padding: '14px 20px',
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  color: '#666',
-                  background: '#f3f4f6',
-                  border: '2px solid #e5e7eb',
-                  borderRadius: '10px',
-                  cursor: 'pointer',
-                  transition: 'background 0.2s'
-                }}
-                onMouseEnter={(e) => e.target.style.background = '#e5e7eb'}
-                onMouseLeave={(e) => e.target.style.background = '#f3f4f6'}
-              >
-                Reset
-              </button>
-            </div>
+                  border: '2px solid #667eea'
+                }}>
+                  <label style={{
+                    display: 'block',
+                    fontWeight: '600',
+                    marginBottom: '8px',
+                    color: '#333',
+                    fontSize: '0.9rem'
+                  }}>
+                    Select Target Language
+                  </label>
+                  <select
+                    value={targetLanguage}
+                    onChange={(e) => {
+                      setTargetLanguage(e.target.value);
+                      // Automatically trigger translation when language is selected
+                      handleSubmit(null, 'translate');
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '1rem',
+                      border: '2px solid #667eea',
+                      borderRadius: '8px',
+                      outline: 'none',
+                      backgroundColor: 'white',
+                      cursor: 'pointer',
+                      boxSizing: 'border-box'
+                    }}
+                  >
+                    {SUPPORTED_LANGUAGES.map(lang => (
+                      <option key={lang.code} value={lang.code}>
+                        {lang.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {error && (
-          <div style={{
-            marginTop: '20px',
-            padding: '16px',
-            backgroundColor: '#fee2e2',
-            border: '2px solid #ef4444',
-            borderRadius: '10px',
-            color: '#991b1b',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px'
-          }}>
-            <AlertCircle size={24} />
-            <span>{error}</span>
-          </div>
-        )}
+            <div style={{
+              marginTop: '20px',
+              padding: '16px',
+              backgroundColor: '#fee2e2',
+              border: '2px solid #ef4444',
+              borderRadius: '10px',
+              color: '#991b1b',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}>
+              <AlertCircle size={24} />
+              <span>{error}</span>
+            </div>
+          )}
 
-        {result && (
+          {result && (
           <div style={{
             marginTop: '30px',
             backgroundColor: 'white',
