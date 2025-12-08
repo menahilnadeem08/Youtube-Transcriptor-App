@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play, Languages, FileType, Copy, CopyCheck } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play, Languages, FileType, Copy, CopyCheck, Search, ChevronUp, ChevronDown, X } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
@@ -33,6 +33,10 @@ export default function App() {
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [activeMode, setActiveMode] = useState(null); // 'transcribe' or 'translate'
   const [copied, setCopied] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+  const [matchIndices, setMatchIndices] = useState([]);
+  const textContainerRef = React.useRef(null);
 
   // Handle plan selection from Pricing page
   const handlePlanSelect = (planId, autoSwitch = false) => {
@@ -102,7 +106,51 @@ export default function App() {
   // Reset copied state when result changes
   useEffect(() => {
     setCopied(false);
+    setSearchQuery('');
+    setCurrentMatchIndex(-1);
+    setMatchIndices([]);
   }, [result]);
+
+  // Find matches when search query changes
+  useEffect(() => {
+    if (!result || !result.text || !searchQuery.trim()) {
+      setMatchIndices([]);
+      setCurrentMatchIndex(-1);
+      return;
+    }
+
+    const text = result.text;
+    const query = searchQuery.trim();
+    const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const matches = [];
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+      matches.push(match.index);
+    }
+
+    setMatchIndices(matches);
+    if (matches.length > 0) {
+      setCurrentMatchIndex(0);
+    } else {
+      setCurrentMatchIndex(-1);
+    }
+  }, [searchQuery, result]);
+
+  // Scroll to current match
+  useEffect(() => {
+    if (currentMatchIndex >= 0 && matchIndices.length > 0 && textContainerRef.current) {
+      const matchId = `match-${currentMatchIndex}`;
+      const matchElement = textContainerRef.current.querySelector(`[data-match-id="${matchId}"]`);
+      if (matchElement) {
+        matchElement.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+          inline: 'nearest'
+        });
+      }
+    }
+  }, [currentMatchIndex, matchIndices]);
 
   const extractVideoId = (url) => {
     const patterns = [
@@ -492,6 +540,59 @@ export default function App() {
       }
       document.body.removeChild(textArea);
     }
+  };
+
+  const highlightText = (text, query) => {
+    if (!query.trim()) return text;
+
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${escapedQuery})`, 'gi');
+    const parts = text.split(regex);
+    let matchCounter = 0;
+    
+    return parts.map((part, index) => {
+      // Check if this part matches the query (case-insensitive)
+      const testRegex = new RegExp(`^${escapedQuery}$`, 'i');
+      const isMatch = testRegex.test(part);
+      
+      if (isMatch) {
+        const matchId = matchCounter;
+        matchCounter++;
+        const isCurrentMatch = matchId === currentMatchIndex;
+        return (
+          <mark
+            key={index}
+            data-match-id={`match-${matchId}`}
+            style={{
+              backgroundColor: isCurrentMatch ? '#fbbf24' : '#fef08a',
+              color: '#333',
+              padding: '2px 0',
+              borderRadius: '3px',
+              transition: 'background-color 0.2s'
+            }}
+          >
+            {part}
+          </mark>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  };
+
+  const goToNextMatch = () => {
+    if (matchIndices.length === 0) return;
+    setCurrentMatchIndex((prev) => (prev + 1) % matchIndices.length);
+  };
+
+  const goToPreviousMatch = () => {
+    if (matchIndices.length === 0) return;
+    setCurrentMatchIndex((prev) => (prev - 1 + matchIndices.length) % matchIndices.length);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setCurrentMatchIndex(-1);
+    setMatchIndices([]);
   };
 
   return (
@@ -1100,16 +1201,163 @@ export default function App() {
                   )}
                 </button>
               </div>
+
+              {/* Search Bar */}
               <div style={{
-                padding: '20px',
-                backgroundColor: '#f9fafb',
-                borderRadius: '10px',
-                maxHeight: '400px',
-                overflowY: 'auto',
-                lineHeight: '1.8',
-                color: '#333'
+                marginBottom: '10px',
+                display: 'flex',
+                gap: '8px',
+                alignItems: 'center'
               }}>
-                {result.text}
+                <div style={{
+                  position: 'relative',
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center'
+                }}>
+                  <Search size={18} style={{
+                    position: 'absolute',
+                    left: '12px',
+                    color: '#9ca3af',
+                    pointerEvents: 'none'
+                  }} />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && matchIndices.length > 0) {
+                        e.preventDefault();
+                        goToNextMatch();
+                      } else if (e.key === 'Enter' && e.shiftKey && matchIndices.length > 0) {
+                        e.preventDefault();
+                        goToPreviousMatch();
+                      }
+                    }}
+                    placeholder="Search in transcript... (Enter: next, Shift+Enter: previous)"
+                    style={{
+                      width: '100%',
+                      padding: '10px 40px 10px 40px',
+                      fontSize: '0.9rem',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '8px',
+                      outline: 'none',
+                      transition: 'border 0.2s',
+                      boxSizing: 'border-box'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#667eea'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={clearSearch}
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        padding: '4px',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        color: '#9ca3af'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.color = '#667eea'}
+                      onMouseLeave={(e) => e.currentTarget.style.color = '#9ca3af'}
+                    >
+                      <X size={18} />
+                    </button>
+                  )}
+                </div>
+                {searchQuery && matchIndices.length > 0 && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '0 8px',
+                    fontSize: '0.875rem',
+                    color: '#666'
+                  }}>
+                    <span>
+                      {currentMatchIndex + 1} / {matchIndices.length}
+                    </span>
+                    <button
+                      onClick={goToPreviousMatch}
+                      disabled={matchIndices.length === 0}
+                      style={{
+                        padding: '6px',
+                        background: 'white',
+                        border: '2px solid #e5e7eb',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        color: '#667eea',
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#f0f4ff';
+                        e.currentTarget.style.borderColor = '#667eea';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'white';
+                        e.currentTarget.style.borderColor = '#e5e7eb';
+                      }}
+                    >
+                      <ChevronUp size={18} />
+                    </button>
+                    <button
+                      onClick={goToNextMatch}
+                      disabled={matchIndices.length === 0}
+                      style={{
+                        padding: '6px',
+                        background: 'white',
+                        border: '2px solid #e5e7eb',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        color: '#667eea',
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#f0f4ff';
+                        e.currentTarget.style.borderColor = '#667eea';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'white';
+                        e.currentTarget.style.borderColor = '#e5e7eb';
+                      }}
+                    >
+                      <ChevronDown size={18} />
+                    </button>
+                  </div>
+                )}
+                {searchQuery && matchIndices.length === 0 && (
+                  <div style={{
+                    padding: '0 8px',
+                    fontSize: '0.875rem',
+                    color: '#ef4444'
+                  }}>
+                    No matches found
+                  </div>
+                )}
+              </div>
+
+              <div
+                ref={textContainerRef}
+                data-text-content
+                style={{
+                  padding: '20px',
+                  backgroundColor: '#f9fafb',
+                  borderRadius: '10px',
+                  maxHeight: '400px',
+                  overflowY: 'auto',
+                  lineHeight: '1.8',
+                  color: '#333'
+                }}
+              >
+                {searchQuery ? highlightText(result.text, searchQuery) : result.text}
               </div>
             </div>
 
