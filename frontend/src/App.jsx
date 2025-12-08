@@ -387,7 +387,42 @@ export default function App() {
                   }, 500);
                 } else if (data.error) {
                   hasCompleted = true;
-                  const errorMessage = data.error || 'Failed to process video';
+                  // Use user-friendly error message, log technical details to console
+                  let errorMessage = data.error || 'Failed to process video';
+                  
+                  // Fallback: If error is still in raw format "429 {...}", parse it
+                  if (typeof errorMessage === 'string' && /^\d+\s*\{/.test(errorMessage.trim())) {
+                    try {
+                      const jsonMatch = errorMessage.match(/\{[\s\S]*\}/);
+                      if (jsonMatch) {
+                        const parsed = JSON.parse(jsonMatch[0]);
+                        if (parsed.error && parsed.error.message) {
+                          const groqMessage = parsed.error.message;
+                          // Check if it's a rate limit error
+                          if (parsed.error.code === 'rate_limit_exceeded' || groqMessage.toLowerCase().includes('rate limit')) {
+                            const retryMatch = groqMessage.match(/try again in ([\d\w\s.]+)/i);
+                            if (retryMatch) {
+                              errorMessage = `Translation service rate limit reached. Please try again in ${retryMatch[1]}.`;
+                            } else {
+                              errorMessage = 'Translation service rate limit reached. Please try again in about an hour.';
+                            }
+                          } else {
+                            errorMessage = groqMessage;
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      console.error('Failed to parse error message:', e);
+                    }
+                  }
+                  
+                  if (data.technicalError) {
+                    console.error('Technical error details:', {
+                      userMessage: errorMessage,
+                      technicalError: data.technicalError,
+                      errorType: data.errorType
+                    });
+                  }
                   setError(errorMessage);
                   
                   // If payment is required, show payment button
@@ -406,14 +441,19 @@ export default function App() {
         }
         
         if (!hasCompleted) {
-          setError('Connection closed unexpectedly');
+          console.error('Connection error: Stream closed unexpectedly');
+          setError('Connection was interrupted. Please try again.');
           setLoading(false);
           setProgress(0);
         }
       })
       .catch(err => {
-        console.error('Error:', err);
-        setError('Failed to connect to server. Make sure backend is running.');
+        console.error('Network error details:', {
+          message: err.message,
+          stack: err.stack,
+          name: err.name
+        });
+        setError('Unable to connect to the server. Please check your internet connection and ensure the backend is running.');
         setLoading(false);
         setProgress(0);
       });

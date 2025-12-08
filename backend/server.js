@@ -11,6 +11,7 @@ import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
+import { getUserFriendlyError, formatErrorResponse, logError } from './errorHandler.js';
 
 dotenv.config();
 
@@ -370,23 +371,57 @@ Requirements:
 Text to translate:
 ${text}`;
 
-  const completion = await groq.chat.completions.create({
-    messages: [
-      {
-        role: "user",
-        content: translationPrompt
-      }
-    ],
-    model: "llama-3.3-70b-versatile",
-    temperature: 0.33,
-    max_tokens: 32768,
-  });
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "user",
+          content: translationPrompt
+        }
+      ],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.33,
+      max_tokens: 32768,
+    });
 
-  const translatedText = completion.choices[0].message.content.trim();
-  console.log('✅ Translation completed using Groq Llama-3.3-70b-versatile!');
-  console.log('📄 Translation length:', translatedText.length, 'characters');
-  
-  return translatedText;
+    const translatedText = completion.choices[0].message.content.trim();
+    console.log('✅ Translation completed using Groq Llama-3.3-70b-versatile!');
+    console.log('📄 Translation length:', translatedText.length, 'characters');
+    
+    return translatedText;
+  } catch (groqError) {
+    // Groq SDK errors can come in different formats
+    // Extract error information from various possible structures
+    let errorMessage = groqError.message || groqError.toString();
+    let errorObj = groqError.error;
+    let statusCode = groqError.statusCode || groqError.status;
+    
+    // Check if error message contains "429 {...}" format
+    if (typeof errorMessage === 'string' && /^\d+\s*\{/.test(errorMessage.trim())) {
+      const jsonMatch = errorMessage.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.error) {
+            errorObj = parsed.error;
+            errorMessage = parsed.error.message || errorMessage;
+            statusCode = statusCode || 429;
+          }
+        } catch (e) {
+          // Keep original message
+        }
+      }
+    }
+    
+    // Re-throw with better error structure for error handler
+    const enhancedError = new Error(errorMessage);
+    enhancedError.statusCode = statusCode;
+    enhancedError.status = statusCode;
+    enhancedError.error = errorObj || groqError.error || groqError.response?.data || groqError.body;
+    enhancedError.response = groqError.response;
+    enhancedError.originalError = groqError;
+    throw enhancedError;
+  }
 }
 
 // Clean up temporary files and directories
@@ -539,13 +574,11 @@ app.post('/api/transcript', async (req, res) => {
     res.end();
 
   } catch (error) {
-    console.error('❌ Translation error:', error.message);
+    logError('transcript', error);
+    const errorResponse = formatErrorResponse(error);
     
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({
-        error: error.message || 'Failed to translate video',
-        hint: 'Check server logs for more details'
-      })}\n\n`);
+      res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
       res.end();
     }
   } finally {
@@ -584,10 +617,12 @@ app.get('/api/plans', (req, res) => {
       plans: plans
     });
   } catch (error) {
-    console.error('Error fetching plans:', error);
+    logError('plans', error);
+    const errorResponse = formatErrorResponse(error);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(500).json({
-      error: 'Failed to fetch plans',
+      ...errorResponse,
+      error: 'Unable to load pricing plans. Please refresh the page and try again.',
       plans: []
     });
   }
@@ -670,11 +705,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error creating checkout session:', error);
-    res.status(500).json({
-      error: 'Failed to create checkout session',
-      message: error.message
-    });
+    logError('checkout', error);
+    const errorResponse = formatErrorResponse(error);
+    
+    res.status(500).json(errorResponse);
   }
 });
 
