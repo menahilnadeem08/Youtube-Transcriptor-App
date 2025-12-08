@@ -25,6 +25,12 @@ jobs:
             git fetch origin
             git reset --hard origin/main
             
+            # Install yt-dlp if not present
+            if ! command -v yt-dlp &> /dev/null; then
+              sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+              sudo chmod a+rx /usr/local/bin/yt-dlp
+            fi
+            
             # Backend setup
             cd backend
             npm install --production
