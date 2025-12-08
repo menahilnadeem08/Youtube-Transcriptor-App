@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play, Languages, FileType } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play, Languages, FileType, Copy, CopyCheck } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
@@ -32,6 +32,7 @@ export default function App() {
   const [processingPayment, setProcessingPayment] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [activeMode, setActiveMode] = useState(null); // 'transcribe' or 'translate'
+  const [copied, setCopied] = useState(false);
 
   // Handle plan selection from Pricing page
   const handlePlanSelect = (planId, autoSwitch = false) => {
@@ -97,6 +98,11 @@ export default function App() {
     const healthCheckInterval = setInterval(checkBackendHealth, 30000);
     return () => clearInterval(healthCheckInterval);
   }, []);
+
+  // Reset copied state when result changes
+  useEffect(() => {
+    setCopied(false);
+  }, [result]);
 
   const extractVideoId = (url) => {
     const patterns = [
@@ -459,6 +465,33 @@ export default function App() {
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
+  };
+
+  const copyToClipboard = async () => {
+    if (!result || !result.text) return;
+    
+    try {
+      await navigator.clipboard.writeText(result.text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea');
+      textArea.value = result.text;
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (e) {
+        console.error('Fallback copy failed:', e);
+      }
+      document.body.removeChild(textArea);
+    }
   };
 
   return (
@@ -1009,16 +1042,75 @@ export default function App() {
             </div>
 
             <div style={{
-              padding: '20px',
-              backgroundColor: '#f9fafb',
-              borderRadius: '10px',
-              marginBottom: '20px',
-              maxHeight: '400px',
-              overflowY: 'auto',
-              lineHeight: '1.8',
-              color: '#333'
+              marginBottom: '20px'
             }}>
-              {result.text}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '10px',
+                padding: '0 4px'
+              }}>
+                <h3 style={{
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  color: '#333',
+                  margin: 0
+                }}>
+                  {result.mode === 'transcribe' ? 'Transcription' : 'Translation'} Output
+                </h3>
+                <button
+                  onClick={copyToClipboard}
+                  style={{
+                    padding: '8px 12px',
+                    fontSize: '0.875rem',
+                    fontWeight: '600',
+                    color: copied ? '#10b981' : '#667eea',
+                    backgroundColor: copied ? '#f0fdf4' : 'white',
+                    border: `2px solid ${copied ? '#10b981' : '#667eea'}`,
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!copied) {
+                      e.currentTarget.style.backgroundColor = '#f0f4ff';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!copied) {
+                      e.currentTarget.style.backgroundColor = 'white';
+                    }
+                  }}
+                >
+                  {copied ? (
+                    <>
+                      <CopyCheck size={18} />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={18} />
+                      Copy
+                    </>
+                  )}
+                </button>
+              </div>
+              <div style={{
+                padding: '20px',
+                backgroundColor: '#f9fafb',
+                borderRadius: '10px',
+                maxHeight: '400px',
+                overflowY: 'auto',
+                lineHeight: '1.8',
+                color: '#333'
+              }}>
+                {result.text}
+              </div>
             </div>
 
             <div style={{
