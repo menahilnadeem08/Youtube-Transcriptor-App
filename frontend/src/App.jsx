@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play, Languages, FileType, Copy, CopyCheck, Search, ChevronUp, ChevronDown, X } from 'lucide-react';
+import { Download, Loader2, AlertCircle, Clock, FileText, File, CheckCircle, XCircle, Home, DollarSign, Play, Languages, FileType, Copy, CopyCheck, Search, ChevronUp, ChevronDown, X, RotateCcw } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph } from 'docx';
 import LoadingOverlay from './LoadingOverlay';
@@ -930,6 +930,83 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Reset Button */}
+              <div style={{ marginBottom: '12px' }}>
+                <button
+                  onClick={() => {
+                    setVideoUrl('');
+                    setResult(null);
+                    setError('');
+                    setShowLanguageSelector(false);
+                    setSearchQuery('');
+                    setCurrentMatchIndex(-1);
+                    setMatchIndices([]);
+                    setCopied(false);
+                  }}
+                  disabled={loading || processingPayment}
+                  style={{
+                    width: '100%',
+                    padding: '14px',
+                    fontSize: '0.95rem',
+                    fontWeight: '600',
+                    color: (loading || processingPayment) ? '#9ca3af' : '#6b7280',
+                    background: (loading || processingPayment) 
+                      ? '#f3f4f6' 
+                      : 'linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)',
+                    border: '2px solid #e5e7eb',
+                    borderRadius: '10px',
+                    cursor: (loading || processingPayment) ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '10px',
+                    transition: 'all 0.3s ease',
+                    boxShadow: (loading || processingPayment) 
+                      ? 'none' 
+                      : '0 2px 4px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1)',
+                    position: 'relative',
+                    overflow: 'hidden'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!loading && !processingPayment) {
+                      e.currentTarget.style.background = 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)';
+                      e.currentTarget.style.borderColor = '#fca5a5';
+                      e.currentTarget.style.color = '#dc2626';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.15), 0 2px 4px rgba(239, 68, 68, 0.1)';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!loading && !processingPayment) {
+                      e.currentTarget.style.background = 'linear-gradient(135deg, #ffffff 0%, #f9fafb 100%)';
+                      e.currentTarget.style.borderColor = '#e5e7eb';
+                      e.currentTarget.style.color = '#6b7280';
+                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1)';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }
+                  }}
+                  onMouseDown={(e) => {
+                    if (!loading && !processingPayment) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }
+                  }}
+                  onMouseUp={(e) => {
+                    if (!loading && !processingPayment) {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }
+                  }}
+                >
+                  <RotateCcw 
+                    size={18} 
+                    className="reset-icon"
+                    style={{
+                      transition: 'transform 0.3s ease'
+                    }}
+                  />
+                  Reset Form
+                </button>
+              </div>
+
               {/* Language Selector - Only shown when translation is needed, appears below buttons */}
               {showLanguageSelector && (
                 <div style={{ 
@@ -1524,6 +1601,15 @@ export default function App() {
         @keyframes spin {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
+        }
+        .reset-icon {
+          transition: transform 0.3s ease;
+        }
+        button:hover .reset-icon {
+          transform: rotate(-180deg);
+        }
+        button:disabled .reset-icon {
+          transform: none;
         }
       `}</style>
     </div>
