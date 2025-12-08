@@ -18,7 +18,7 @@ import { API_URL } from '../config/api';
 import { SUPPORTED_LANGUAGES } from '../utils/languages';
 import { downloadTxt, downloadPdf, downloadDocx } from '../utils/fileExport';
 import * as Clipboard from 'expo-clipboard';
-import { Picker } from '@react-native-picker/picker';
+import LanguageSelector from '../components/LanguageSelector';
 
 const { width } = Dimensions.get('window');
 
@@ -458,34 +458,20 @@ export default function GenerateScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {showLanguageSelector && (
-                  <View style={styles.languageSelector}>
-                    <Text style={styles.languageLabel}>Select Target Language</Text>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={targetLanguage}
-                        onValueChange={(itemValue) => {
-                          setTargetLanguage(itemValue);
-                          const planToUse = selectedPlan || 'free';
-                          if (planToUse === 'free') {
-                            handleSubmit(null, 'translate', itemValue);
-                          } else {
-                            handlePayment();
-                          }
-                        }}
-                        style={styles.picker}
-                      >
-                        {SUPPORTED_LANGUAGES.map((lang) => (
-                          <Picker.Item
-                            key={lang.code}
-                            label={lang.name}
-                            value={lang.code}
-                          />
-                        ))}
-                      </Picker>
-                    </View>
-                  </View>
-                )}
+                <LanguageSelector
+                  visible={showLanguageSelector}
+                  onClose={() => setShowLanguageSelector(false)}
+                  selectedLanguage={targetLanguage}
+                  onSelectLanguage={(langCode) => {
+                    setTargetLanguage(langCode);
+                    const planToUse = selectedPlan || 'free';
+                    if (planToUse === 'free') {
+                      handleSubmit(null, 'translate', langCode);
+                    } else {
+                      handlePayment();
+                    }
+                  }}
+                />
 
                 <TouchableOpacity
                   style={styles.resetButton}
@@ -544,29 +530,15 @@ export default function GenerateScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {showLanguageSelector && (
-                  <View style={styles.languageSelector}>
-                    <Text style={styles.languageLabel}>Select Target Language</Text>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={targetLanguage}
-                        onValueChange={(itemValue) => {
-                          setTargetLanguage(itemValue);
-                          handleSubmit(null, 'translate', itemValue);
-                        }}
-                        style={styles.picker}
-                      >
-                        {SUPPORTED_LANGUAGES.map((lang) => (
-                          <Picker.Item
-                            key={lang.code}
-                            label={lang.name}
-                            value={lang.code}
-                          />
-                        ))}
-                      </Picker>
-                    </View>
-                  </View>
-                )}
+                <LanguageSelector
+                  visible={showLanguageSelector}
+                  onClose={() => setShowLanguageSelector(false)}
+                  selectedLanguage={targetLanguage}
+                  onSelectLanguage={(langCode) => {
+                    setTargetLanguage(langCode);
+                    handleSubmit(null, 'translate', langCode);
+                  }}
+                />
               </>
             )}
 
@@ -786,29 +758,6 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
-  },
-  languageSelector: {
-    marginBottom: 12,
-    padding: 16,
-    backgroundColor: '#f0f4ff',
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#667eea',
-  },
-  languageLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#333',
-  },
-  pickerContainer: {
-    borderWidth: 2,
-    borderColor: '#667eea',
-    borderRadius: 8,
-    backgroundColor: 'white',
-  },
-  picker: {
-    height: 50,
   },
   resetButton: {
     width: '100%',
