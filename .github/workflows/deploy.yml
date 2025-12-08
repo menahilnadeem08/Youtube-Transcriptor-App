@@ -45,8 +45,16 @@ jobs:
             
             # Frontend setup
             cd ../frontend
+            
+            # Create .env.production
+            echo "VITE_API_URL=/api" > .env.production
+            
             npm install
             npm run build
+            
+            # Fix permissions
+            sudo chmod -R 644 ~/Youtube-Transcriptor-App/frontend/dist/*
+            sudo chmod 755 ~/Youtube-Transcriptor-App/frontend/dist/assets
             
             # Reload nginx to serve new build
             sudo systemctl reload nginx
