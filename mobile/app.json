@@ -5,6 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/logo.png",
     "splash": {
       "backgroundColor": "#667eea",
       "resizeMode": "contain"
@@ -29,6 +30,7 @@
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#667eea"
       },
       "package": "com.youtubetranscript.app"
