@@ -39,10 +39,20 @@ jobs:
             cd backend
             npm install --production
             
-            # Update .env with secrets
-            echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" > .env
+            # Update .env with all required environment variables
+            # Note: Backend has defaults for PORT (3000), FRONTEND_URL, and Stripe Price IDs if not set
+            echo "PORT=3000" > .env
+            if [ -n "${{ secrets.FRONTEND_URL }}" ]; then
+              echo "FRONTEND_URL=${{ secrets.FRONTEND_URL }}" >> .env
+            else
+              echo "FRONTEND_URL=http://18.217.107.170/" >> .env
+            fi
             echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
-            echo "PORT=3000" >> .env
+            echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> .env
+            echo "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" >> .env
+            echo "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" >> .env
+            echo "STRIPE_PRICE_ID_BASIC=${{ secrets.STRIPE_PRICE_ID_BASIC }}" >> .env
+            echo "STRIPE_PRICE_ID_PREMIUM=${{ secrets.STRIPE_PRICE_ID_PREMIUM }}" >> .env
             
             pm2 restart youtube-backend || pm2 start server.js --name youtube-backend
             pm2 save
@@ -50,7 +60,7 @@ jobs:
             # Frontend setup
             cd ../frontend
             
-            # Create .env.production
+            # Create .env.production with all frontend environment variables
             echo "VITE_API_URL=/api" > .env.production
             
             npm install
