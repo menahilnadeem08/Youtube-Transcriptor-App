@@ -6,61 +6,69 @@ on:
       - main
       - mobileapp
     paths:
-      - 'youtube-transcript/mobile/**'
+      - 'mobile/**'
       - '.github/workflows/mobile-apk-build.yml'
   pull_request:
     branches:
       - main
       - mobileapp
     paths:
-      - 'youtube-transcript/mobile/**'
+      - 'mobile/**'
       - '.github/workflows/mobile-apk-build.yml'
-  workflow_dispatch:  # Allows manual triggering from Actions tab
+  workflow_dispatch: # manual trigger
 
 jobs:
   build-apk:
     name: Build Android APK
     runs-on: ubuntu-latest
-    
+
     steps:
+      # Step 1: Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Step 2: Setup Node.js with caching in mobile folder
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
-          cache-dependency-path: youtube-transcript/mobile/package-lock.json
+          cache-dependency-path: mobile/package-lock.json
 
+      # Step 3: Setup Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
+      # Step 4: Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # Step 5: Install mobile dependencies
       - name: Install dependencies
-        working-directory: youtube-transcript/mobile
+        working-directory: mobile
         run: npm ci
 
+      # Step 6: Install Expo CLI globally
       - name: Install Expo CLI
         run: npm install -g @expo/cli
 
+      # Step 7: Prebuild Android project
       - name: Prebuild Android project
-        working-directory: youtube-transcript/mobile
+        working-directory: mobile
         run: npx expo prebuild --platform android --clean
 
+      # Step 8: Build APK using Gradle
       - name: Build APK
-        working-directory: youtube-transcript/mobile/android
+        working-directory: mobile/android
         run: ./gradlew assembleRelease
 
+      # Step 9: Upload APK artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: youtube-transcript/mobile/android/app/build/outputs/apk/release/*.apk
+          path: mobile/android/app/build/outputs/apk/release/*.apk
           retention-days: 30
-
