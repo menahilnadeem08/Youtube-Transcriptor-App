@@ -1,0 +1,66 @@
+name: Build Mobile APK
+
+on:
+  push:
+    branches:
+      - main
+      - mobileapp
+    paths:
+      - 'youtube-transcript/mobile/**'
+      - '.github/workflows/mobile-apk-build.yml'
+  pull_request:
+    branches:
+      - main
+      - mobileapp
+    paths:
+      - 'youtube-transcript/mobile/**'
+      - '.github/workflows/mobile-apk-build.yml'
+  workflow_dispatch:  # Allows manual triggering from Actions tab
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: youtube-transcript/mobile/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        working-directory: youtube-transcript/mobile
+        run: npm ci
+
+      - name: Install Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Prebuild Android project
+        working-directory: youtube-transcript/mobile
+        run: npx expo prebuild --platform android --clean
+
+      - name: Build APK
+        working-directory: youtube-transcript/mobile/android
+        run: ./gradlew assembleRelease
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: youtube-transcript/mobile/android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
