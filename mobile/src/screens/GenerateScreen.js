@@ -305,6 +305,94 @@ export default function GenerateScreen() {
     };
 
     xhr.onload = () => {
+      // Process any remaining data in the buffer before checking completion
+      if (!hasCompleted && xhr.responseText) {
+        const newData = xhr.responseText.substring(buffer.length);
+        if (newData.trim()) {
+          const lines = newData.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                
+                if (data.progress !== undefined) {
+                  setProgress(data.progress);
+                }
+                
+                if (data.success) {
+                  hasCompleted = true;
+                  setProgress(100);
+                  setTimeout(() => {
+                    const resultMode = data.translated ? 'translate' : 'transcribe';
+                    if (resultMode === 'transcribe') {
+                      setResult({
+                        text: data.transcript || data.original,
+                        words: data.wordCount,
+                        readingTime: data.readingTime,
+                        videoId: data.videoId,
+                        mode: 'transcribe',
+                        method: data.transcriptionMethod,
+                      });
+                    } else {
+                      setResult({
+                        original: data.original,
+                        text: data.translated,
+                        words: data.wordCount,
+                        readingTime: data.readingTime,
+                        videoId: data.videoId,
+                        mode: 'translate',
+                        targetLanguage: data.targetLanguage,
+                        method: data.transcriptionMethod,
+                      });
+                    }
+                    setTimeout(() => setLoading(false), 500);
+                  }, 500);
+                } else if (data.error) {
+                  hasCompleted = true;
+                  let errorMessage = data.error || 'Failed to process video';
+                  
+                  if (typeof errorMessage === 'string' && /^\d+\s*\{/.test(errorMessage.trim())) {
+                    try {
+                      const jsonMatch = errorMessage.match(/\{[\s\S]*\}/);
+                      if (jsonMatch) {
+                        const parsed = JSON.parse(jsonMatch[0]);
+                        if (parsed.error && parsed.error.message) {
+                          const groqMessage = parsed.error.message;
+                          if (parsed.error.code === 'rate_limit_exceeded' || groqMessage.toLowerCase().includes('rate limit')) {
+                            const retryMatch = groqMessage.match(/try again in ([\d\w\s.]+)/i);
+                            if (retryMatch) {
+                              errorMessage = `Translation service rate limit reached. Please try again in ${retryMatch[1]}.`;
+                            } else {
+                              errorMessage = 'Translation service rate limit reached. Please try again in about an hour.';
+                            }
+                          } else {
+                            errorMessage = groqMessage;
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      console.error('Failed to parse error message:', e);
+                    }
+                  }
+                  
+                  setError(errorMessage);
+                  
+                  if (data.requiresPayment) {
+                    setPaymentSessionId(null);
+                  }
+                  
+                  setLoading(false);
+                  setProgress(0);
+                }
+              } catch (e) {
+                console.error('Error parsing SSE data in onload:', e);
+              }
+            }
+          }
+        }
+      }
+      
+      // Only show error if we still haven't completed after processing remaining data
       if (!hasCompleted) {
         console.error('Connection error: Stream closed unexpectedly');
         setError('Connection was interrupted. Please try again.');
