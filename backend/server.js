@@ -13,6 +13,7 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import { getUserFriendlyError, formatErrorResponse, logError } from './services/errorHandler.js';
 import { generateSummary } from './services/aiSummaryService.js';
+import { initializeRAG, queryRAG, deleteRAGData } from './services/ragService.js';
 
 dotenv.config();
 
@@ -718,6 +719,94 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
+});
+
+// Initialize RAG system with transcript
+app.post('/api/chat/initialize', async (req, res) => {
+  try {
+    const { videoId, transcriptText } = req.body;
+
+    if (!videoId) {
+      return res.status(400).json({
+        error: 'Video ID is required'
+      });
+    }
+
+    if (!transcriptText || transcriptText.trim().length === 0) {
+      return res.status(400).json({
+        error: 'Transcript text is required'
+      });
+    }
+
+    console.log('📚 Initializing RAG system...');
+    const result = await initializeRAG(videoId, transcriptText);
+
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logError('chat/initialize', error);
+    const errorResponse = formatErrorResponse(error);
+    res.status(500).json(errorResponse);
+  }
+});
+
+// Query RAG system
+app.post('/api/chat/query', async (req, res) => {
+  try {
+    const { videoId, question } = req.body;
+
+    if (!videoId) {
+      return res.status(400).json({
+        error: 'Video ID is required'
+      });
+    }
+
+    if (!question || question.trim().length === 0) {
+      return res.status(400).json({
+        error: 'Question is required'
+      });
+    }
+
+    console.log('💬 Processing chat query...');
+    const answer = await queryRAG(videoId, question);
+
+    res.json({
+      success: true,
+      answer: answer,
+      videoId: videoId
+    });
+  } catch (error) {
+    logError('chat/query', error);
+    const errorResponse = formatErrorResponse(error);
+    res.status(500).json(errorResponse);
+  }
+});
+
+// Delete RAG data for a video
+app.delete('/api/chat/:videoId', async (req, res) => {
+  try {
+    const { videoId } = req.params;
+
+    if (!videoId) {
+      return res.status(400).json({
+        error: 'Video ID is required'
+      });
+    }
+
+    console.log('🗑️ Deleting RAG data...');
+    const result = await deleteRAGData(videoId);
+
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logError('chat/delete', error);
+    const errorResponse = formatErrorResponse(error);
+    res.status(500).json(errorResponse);
+  }
 });
 
 // Get pricing plans endpoint

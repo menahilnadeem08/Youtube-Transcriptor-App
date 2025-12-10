@@ -6,6 +6,7 @@ import LoadingOverlay from './LoadingOverlay';
 import HomePage from './HomePage';
 import PricingPage from './PricingPage';
 import SummarySection from './SummarySection';
+import ChatSection from './ChatSection';
 import { SUPPORTED_LANGUAGES } from './languages';
 
 
@@ -1622,6 +1623,7 @@ export default function App() {
             </div>
 
             <SummarySection result={result} />
+            <ChatSection result={result} />
           </div>
         )}
 
