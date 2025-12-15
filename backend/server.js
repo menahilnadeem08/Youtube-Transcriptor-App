@@ -202,7 +202,24 @@ async function downloadAudio(url, retryCount = 0) {
       throw new Error(`yt-dlp is not installed. Please install it on your server.`);
     }
 
-    const cmd = `${ytDlpCmd} -f bestaudio --no-playlist -o "${outputTemplate}" "${url}" 2>&1`;
+    // Allow configuring yt-dlp flags so EC2 can handle ciphered/limited videos
+    const extractorArgs = process.env.YTDLP_EXTRACTOR_ARGS || '--extractor-args "youtube:player_client=default"';
+    const cookiesFile = process.env.YTDLP_COOKIES;
+    const geoBypass = process.env.YTDLP_GEO_BYPASS; // e.g., "US"
+
+    const cmdParts = [
+      `${ytDlpCmd}`,
+      '-f bestaudio',
+      '--no-playlist',
+      extractorArgs,
+      cookiesFile ? `--cookies "${cookiesFile}"` : '',
+      geoBypass ? `--geo-bypass-country ${geoBypass}` : '',
+      `-o "${outputTemplate}"`,
+      `"${url}"`,
+      '2>&1'
+    ].filter(Boolean);
+
+    const cmd = cmdParts.join(' ');
     let stdout = '';
     let stderr = '';
 
