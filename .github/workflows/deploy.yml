@@ -14,6 +14,48 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Test SSH Connection
+        uses: appleboy/ssh-action@v1.0.3
+        id: ssh-test
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          timeout: 30s
+          command_timeout: 10s
+          script: |
+            echo "🔍 Testing SSH connection to EC2..."
+            echo "✅ SSH Connection Successful!"
+            echo ""
+            echo "📊 System Information:"
+            echo "   Hostname: $(hostname)"
+            echo "   IP Address: $(hostname -I | awk '{print $1}')"
+            echo "   Uptime: $(uptime -p)"
+            echo "   Disk Space:"
+            df -h / | tail -1
+            echo "   Memory:"
+            free -h | grep Mem
+            echo ""
+            echo "🔧 Checking required tools:"
+            echo -n "   Node.js: " && node --version || echo "❌ Not installed"
+            echo -n "   npm: " && npm --version || echo "❌ Not installed"
+            echo -n "   PM2: " && pm2 --version || echo "❌ Not installed"
+            echo -n "   yt-dlp: " && yt-dlp --version || echo "❌ Not installed"
+            echo -n "   Git: " && git --version || echo "❌ Not installed"
+            echo ""
+            echo "📁 Checking project directory:"
+            if [ -d ~/Youtube-Transcriptor-App ]; then
+              echo "   ✅ Project directory exists"
+              cd ~/Youtube-Transcriptor-App
+              echo "   Current branch: $(git branch --show-current 2>/dev/null || echo 'N/A')"
+              echo "   Last commit: $(git log -1 --oneline 2>/dev/null || echo 'N/A')"
+            else
+              echo "   ⚠️  Project directory not found"
+            fi
+            echo ""
+            echo "✅ SSH connection test completed successfully!"
+
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -24,6 +66,10 @@ jobs:
           timeout: 60s
           command_timeout: 30m
           script: |
+            echo "🚀 Starting deployment..."
+            echo "📡 Connected to: $(hostname) ($(hostname -I | awk '{print $1}'))"
+            echo ""
+            
             cd ~/Youtube-Transcriptor-App
             
             # Ensure HTTPS remote (works without SSH keys)
@@ -48,7 +94,7 @@ jobs:
             if [ -n "${{ secrets.FRONTEND_URL }}" ]; then
               echo "FRONTEND_URL=${{ secrets.FRONTEND_URL }}" >> .env
             else
-              echo "FRONTEND_URL=http://13.58.58.36/" >> .env
+              echo "FRONTEND_URL=http://3.14.107.148/" >> .env
             fi
             echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
             echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> .env
@@ -67,7 +113,9 @@ jobs:
             echo "VITE_API_URL=/api" > .env.production
             
             npm install
-            npm run build
+            echo "Starting Vite build..."
+            npm run build -- --logLevel info
+            echo "Vite build completed successfully!"
             
             # Fix permissions
             sudo chmod -R 644 ~/Youtube-Transcriptor-App/frontend/dist/*
@@ -75,4 +123,24 @@ jobs:
             
             # Reload nginx to serve new build
             sudo systemctl reload nginx
+            
+            echo ""
+            echo "✅ Deployment completed successfully!"
+            echo ""
+            echo "📊 Final Status Check:"
+            echo "   PM2 Status:"
+            pm2 list
+            echo ""
+            echo "   Nginx Status:"
+            sudo systemctl is-active nginx && echo "   ✅ Nginx is running" || echo "   ❌ Nginx is not running"
+            echo ""
+            echo "   Frontend Build:"
+            if [ -d ~/Youtube-Transcriptor-App/frontend/dist ]; then
+              echo "   ✅ Frontend dist folder exists"
+              echo "   Files: $(ls -1 ~/Youtube-Transcriptor-App/frontend/dist | wc -l) files"
+            else
+              echo "   ⚠️  Frontend dist folder not found"
+            fi
+            echo ""
+            echo "🎉 All deployment steps completed!"
 
