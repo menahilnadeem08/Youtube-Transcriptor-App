@@ -250,6 +250,19 @@ async function downloadAudio(url, retryCount = 0, proxyURL = null) {
     }
 
     const combinedOutput = (stdout + stderr).toLowerCase();
+    
+    // Check for proxy 403 errors - fallback to no proxy
+    const isProxy403Error = proxyURL && (
+      combinedOutput.includes('403 forbidden') || 
+      combinedOutput.includes('tunnel connection failed: 403') ||
+      combinedOutput.includes('403') && combinedOutput.includes('proxy')
+    );
+    
+    if (isProxy403Error && retryCount === 0) {
+      console.log('⚠️  Proxy returned 403 Forbidden, retrying without proxy...');
+      return downloadAudio(url, retryCount + 1, null); // Retry without proxy
+    }
+    
     if (combinedOutput.includes('error') || combinedOutput.includes('unavailable') || combinedOutput.includes('private')) {
       if (combinedOutput.includes('private') || combinedOutput.includes('sign in')) {
         throw new Error('Video is private or requires sign-in');
@@ -293,9 +306,14 @@ async function downloadAudio(url, retryCount = 0, proxyURL = null) {
     const errorMsg = error.message || error.toString();
     console.error(` ✗ Download failed: ${errorMsg}`);
 
+    // If proxy failed and we haven't tried without proxy yet, retry without proxy
+    if (proxyURL && retryCount === 0 && (errorMsg.includes('403') || errorMsg.includes('Forbidden'))) {
+      console.log('⚠️  Proxy authentication failed, retrying without proxy...');
+      return downloadAudio(url, retryCount + 1, null);
+    }
+
     const isBotError = errorMsg.includes('Sign in to confirm') || errorMsg.includes('bot') || 
-                       errorMsg.includes('429') || errorMsg.includes('403') || 
-                       errorMsg.includes('rate limit');
+                       errorMsg.includes('429') || errorMsg.includes('rate limit');
 
     if (isBotError && retryCount < MAX_RETRIES) {
       const delayMs = Math.pow(2, retryCount) * 5000;

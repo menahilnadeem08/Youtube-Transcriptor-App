@@ -14,6 +14,14 @@ const PROXY_CONFIG = {
   enabled: process.env.PROXY_ENABLED !== 'false' // Enable by default, set PROXY_ENABLED=false to disable
 };
 
+// Log proxy configuration status on startup (without sensitive data)
+console.log('🔧 Proxy Configuration:');
+console.log(`   Enabled: ${PROXY_CONFIG.enabled}`);
+console.log(`   Host: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`);
+console.log(`   Username: ${PROXY_CONFIG.username} (country will be appended)`);
+console.log(`   Default Country: ${PROXY_CONFIG.defaultCountry.toUpperCase()}`);
+console.log(`   Allowed Countries: ${PROXY_CONFIG.allowedCountries.map(c => c.toUpperCase()).join(', ')}`);
+
 /**
  * Detect user's country from IP address
  * @param {string} ip - User's IP address
