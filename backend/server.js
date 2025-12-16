@@ -13,6 +13,7 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import { getUserFriendlyError, formatErrorResponse, logError } from './services/errorHandler.js';
 import { generateSummary } from './services/aiSummaryService.js';
+import { detectCountryFromIP, buildProxyURL, getProxyDetails, getUserIP, logProxyUsage } from './services/proxyService.js';
 
 dotenv.config();
 
@@ -184,11 +185,16 @@ function extractVideoId(url) {
   return null;
 }
 
-// Download video audio using yt-dlp
-async function downloadAudio(url, retryCount = 0) {
+// Download video audio using yt-dlp with proxy support
+async function downloadAudio(url, retryCount = 0, proxyURL = null) {
   const MAX_RETRIES = 3;
   try {
     console.log(` 📥 Downloading: ${url} (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
+    if (proxyURL) {
+      // Don't log the full proxy URL with password
+      const sanitizedProxy = proxyURL.replace(/:[^:@]+@/, ':***@');
+      console.log(` 🌐 Using proxy: ${sanitizedProxy}`);
+    }
 
     const outputTemplate = path.join(tempDir, '%(title)s.%(ext)s');
     const isWindows = process.platform === 'win32';
@@ -204,15 +210,22 @@ async function downloadAudio(url, retryCount = 0) {
 
     // Allow configuring yt-dlp flags so EC2 can handle ciphered/limited videos
     const extractorArgs = process.env.YTDLP_EXTRACTOR_ARGS || '--extractor-args "youtube:player_client=default"';
-    const cookiesFile = process.env.YTDLP_COOKIES;
     const geoBypass = process.env.YTDLP_GEO_BYPASS; // e.g., "US"
+
+    // Set proxy via environment variables (more reliable than --proxy flag)
+    const env = { ...process.env };
+    if (proxyURL) {
+      env.HTTP_PROXY = proxyURL;
+      env.HTTPS_PROXY = proxyURL;
+      env.http_proxy = proxyURL;
+      env.https_proxy = proxyURL;
+    }
 
     const cmdParts = [
       `${ytDlpCmd}`,
       '-f bestaudio',
       '--no-playlist',
       extractorArgs,
-      cookiesFile ? `--cookies "${cookiesFile}"` : '',
       geoBypass ? `--geo-bypass-country ${geoBypass}` : '',
       `-o "${outputTemplate}"`,
       `"${url}"`,
@@ -226,7 +239,8 @@ async function downloadAudio(url, retryCount = 0) {
     try {
       const result = await execAsync(cmd, {
         maxBuffer: 50 * 1024 * 1024,
-        timeout: 120000
+        timeout: 1200000,
+        env: env
       });
       stdout = result.stdout || '';
       stderr = result.stderr || '';
@@ -274,7 +288,7 @@ async function downloadAudio(url, retryCount = 0) {
       const delayMs = Math.pow(2, retryCount) * 5000;
       console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
-      return downloadAudio(url, retryCount + 1);
+      return downloadAudio(url, retryCount + 1, proxyURL);
     }
 
     throw new Error('No audio file was downloaded. The video might be age-restricted, private, or unavailable.');
@@ -290,7 +304,7 @@ async function downloadAudio(url, retryCount = 0) {
       const delayMs = Math.pow(2, retryCount) * 5000;
       console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
-      return downloadAudio(url, retryCount + 1);
+      return downloadAudio(url, retryCount + 1, proxyURL);
     }
 
     throw error;
@@ -552,6 +566,15 @@ app.post('/api/transcript', async (req, res) => {
     
     console.log('Received request:', { videoUrl, targetLanguage });
     
+    // Detect user's country from IP for proxy routing
+    const userIP = getUserIP(req);
+    const userCountry = detectCountryFromIP(userIP);
+    const proxyURL = buildProxyURL(userCountry);
+    const proxyDetails = getProxyDetails(userCountry);
+    
+    // Log proxy usage details
+    logProxyUsage(proxyDetails, videoUrl);
+    
     // Extract video ID
     const videoId = extractVideoId(videoUrl);
     if (!videoId) {
@@ -598,8 +621,8 @@ app.post('/api/transcript', async (req, res) => {
     if (!originalText || originalText.length === 0) {
       console.log('🎤 Starting transcription with OpenAI Whisper (auto-detect language)...');
       
-      sendProgress(res, 35, 'Downloading audio...');
-      audioPath = await downloadAudio(videoUrl);
+      sendProgress(res, 35, 'Downloading audio via proxy...');
+      audioPath = await downloadAudio(videoUrl, 0, proxyURL); // Pass proxy URL
 
       if (!audioPath) {
         throw new Error('Could not download audio from YouTube');
@@ -636,6 +659,8 @@ app.post('/api/transcript', async (req, res) => {
     console.log('='.repeat(80));
     console.log('🎥 Video ID:', videoId);
     console.log('📝 Transcription Method:', transcriptionMethod);
+    console.log('🌍 User Country:', proxyDetails.country);
+    console.log('🌐 Proxy Used:', proxyDetails.host + ':' + proxyDetails.port);
     if (targetLanguage) {
       console.log('🌐 Translation Target:', targetLanguage);
     }
@@ -734,6 +759,25 @@ app.get('/api/health', (req, res) => {
     service: 'YouTube Transcript Backend',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
+  });
+});
+
+// Test proxy endpoint
+app.get('/api/test-proxy', (req, res) => {
+  const userIP = getUserIP(req);
+  const country = detectCountryFromIP(userIP);
+  const proxyURL = buildProxyURL(country);
+  const details = getProxyDetails(country);
+  
+  res.json({
+    userIP,
+    detectedCountry: country.toUpperCase(),
+    proxy: {
+      host: details.host,
+      port: details.port,
+      username: details.username,
+      url: proxyURL.replace(/:[^:@]+@/, ':***@') // Sanitized
+    }
   });
 });
 
