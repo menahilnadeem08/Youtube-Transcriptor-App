@@ -20,6 +20,7 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "form-data": "^4.0.0",
+    "geoip-lite": "^1.4.10",
     "groq-sdk": "^0.35.0",
     "nodemon": "^3.1.11",
     "openai": "^4.28.0",
