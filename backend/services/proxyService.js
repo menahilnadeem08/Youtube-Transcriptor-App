@@ -9,8 +9,9 @@ const PROXY_CONFIG = {
   port: process.env.PROXY_PORT || 33335,
   username: process.env.PROXY_USERNAME || 'brd-customer-hl_acbb125b-zone-residential_proxy1',
   password: process.env.PROXY_PASSWORD || '0r3m01o2pbhp',
-  allowedCountries: process.env.PROXY_ALLOWED_COUNTRIES ? process.env.PROXY_ALLOWED_COUNTRIES.split(',').map(c => c.trim().toLowerCase()) : ['in', 'pk'], // India, Pakistan
-  defaultCountry: process.env.PROXY_DEFAULT_COUNTRY || 'in' // Default to India if country detection fails
+  allowedCountries: process.env.PROXY_ALLOWED_COUNTRIES ? process.env.PROXY_ALLOWED_COUNTRIES.split(',').map(c => c.trim().toLowerCase()) : ['in', 'pk'],
+  defaultCountry: process.env.PROXY_DEFAULT_COUNTRY || 'in',
+  enabled: process.env.PROXY_ENABLED !== 'false' // Enable by default, set PROXY_ENABLED=false to disable
 };
 
 /**
@@ -58,21 +59,23 @@ export function detectCountryFromIP(ip) {
 /**
  * Build Bright Data proxy URL with country-specific routing
  * @param {string} countryCode - Two-letter country code (lowercase)
- * @returns {string} - Proxy URL in format: http://username:password@host:port
+ * @returns {string|null} - Proxy URL in format: http://username:password@host:port, or null if disabled
  */
 export function buildProxyURL(countryCode) {
+  // Check if proxy is enabled
+  if (!PROXY_CONFIG.enabled) {
+    return null;
+  }
+
   // Validate country code
   const country = countryCode ? countryCode.toLowerCase() : PROXY_CONFIG.defaultCountry;
   
-  // Build username with country code
+  // Build username with country code (Bright Data format)
   const usernameWithCountry = `${PROXY_CONFIG.username}-country-${country}`;
   
-  // URL encode username and password to handle special characters
-  const encodedUsername = encodeURIComponent(usernameWithCountry);
-  const encodedPassword = encodeURIComponent(PROXY_CONFIG.password);
-  
-  // Build proxy URL with encoded credentials
-  const proxyURL = `http://${encodedUsername}:${encodedPassword}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
+  // Build proxy URL (no encoding needed for standard credentials)
+  // Format: http://username:password@host:port
+  const proxyURL = `http://${usernameWithCountry}:${PROXY_CONFIG.password}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
   
   return proxyURL;
 }
@@ -85,13 +88,15 @@ export function buildProxyURL(countryCode) {
 export function getProxyDetails(countryCode) {
   const country = countryCode ? countryCode.toLowerCase() : PROXY_CONFIG.defaultCountry;
   const usernameWithCountry = `${PROXY_CONFIG.username}-country-${country}`;
+  const proxyURL = buildProxyURL(country);
   
   return {
     host: PROXY_CONFIG.host,
     port: PROXY_CONFIG.port,
     username: usernameWithCountry,
     country: country.toUpperCase(),
-    fullURL: buildProxyURL(country)
+    enabled: PROXY_CONFIG.enabled,
+    fullURL: proxyURL
   };
 }
 
