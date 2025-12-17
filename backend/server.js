@@ -13,7 +13,6 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import { getUserFriendlyError, formatErrorResponse, logError } from './services/errorHandler.js';
 import { generateSummary } from './services/aiSummaryService.js';
-import { detectCountryFromIP, buildProxyURL, getProxyDetails, getUserIP, logProxyUsage } from './services/proxyService.js';
 
 dotenv.config();
 
@@ -185,16 +184,11 @@ function extractVideoId(url) {
   return null;
 }
 
-// Download video audio using yt-dlp with proxy support
-async function downloadAudio(url, retryCount = 0, proxyURL = null) {
+// Download video audio using yt-dlp
+async function downloadAudio(url, retryCount = 0) {
   const MAX_RETRIES = 3;
   try {
     console.log(` 📥 Downloading: ${url} (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
-    if (proxyURL) {
-      // Don't log the full proxy URL with password
-      const sanitizedProxy = proxyURL.replace(/:[^:@]+@/, ':***@');
-      console.log(` 🌐 Using proxy: ${sanitizedProxy}`);
-    }
 
     const outputTemplate = path.join(tempDir, '%(title)s.%(ext)s');
     const isWindows = process.platform === 'win32';
@@ -208,22 +202,11 @@ async function downloadAudio(url, retryCount = 0, proxyURL = null) {
       throw new Error(`yt-dlp is not installed. Please install it on your server.`);
     }
 
-    // Set proxy - use both environment variables and --proxy flag for maximum compatibility
-    const env = { ...process.env };
-    if (proxyURL) {
-      // Set environment variables (works for most tools)
-      env.HTTP_PROXY = proxyURL;
-      env.HTTPS_PROXY = proxyURL;
-      env.http_proxy = proxyURL;
-      env.https_proxy = proxyURL;
-    }
-
-    // Build yt-dlp command with proxy only (no extractor args or geo-bypass)
+    // Build yt-dlp command
     const cmdParts = [
       `${ytDlpCmd}`,
       '-f bestaudio',
       '--no-playlist',
-      proxyURL ? `--proxy ${proxyURL}` : '', // Use proxy for country-based routing
       `-o "${outputTemplate}"`,
       `"${url}"`,
       '2>&1'
@@ -236,8 +219,7 @@ async function downloadAudio(url, retryCount = 0, proxyURL = null) {
     try {
       const result = await execAsync(cmd, {
         maxBuffer: 50 * 1024 * 1024,
-        timeout: 1200000,
-        env: env
+        timeout: 1200000
       });
       stdout = result.stdout || '';
       stderr = result.stderr || '';
@@ -250,18 +232,6 @@ async function downloadAudio(url, retryCount = 0, proxyURL = null) {
     }
 
     const combinedOutput = (stdout + stderr).toLowerCase();
-    
-    // Check for proxy 403 errors - fallback to no proxy
-    const isProxy403Error = proxyURL && (
-      combinedOutput.includes('403 forbidden') || 
-      combinedOutput.includes('tunnel connection failed: 403') ||
-      combinedOutput.includes('403') && combinedOutput.includes('proxy')
-    );
-    
-    if (isProxy403Error && retryCount === 0) {
-      console.log('⚠️  Proxy returned 403 Forbidden, retrying without proxy...');
-      return downloadAudio(url, retryCount + 1, null); // Retry without proxy
-    }
     
     if (combinedOutput.includes('error') || combinedOutput.includes('unavailable') || combinedOutput.includes('private')) {
       if (combinedOutput.includes('private') || combinedOutput.includes('sign in')) {
@@ -298,19 +268,13 @@ async function downloadAudio(url, retryCount = 0, proxyURL = null) {
       const delayMs = Math.pow(2, retryCount) * 5000;
       console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
-      return downloadAudio(url, retryCount + 1, proxyURL);
+      return downloadAudio(url, retryCount + 1);
     }
 
     throw new Error('No audio file was downloaded. The video might be age-restricted, private, or unavailable.');
   } catch (error) {
     const errorMsg = error.message || error.toString();
     console.error(` ✗ Download failed: ${errorMsg}`);
-
-    // If proxy failed and we haven't tried without proxy yet, retry without proxy
-    if (proxyURL && retryCount === 0 && (errorMsg.includes('403') || errorMsg.includes('Forbidden'))) {
-      console.log('⚠️  Proxy authentication failed, retrying without proxy...');
-      return downloadAudio(url, retryCount + 1, null);
-    }
 
     const isBotError = errorMsg.includes('Sign in to confirm') || errorMsg.includes('bot') || 
                        errorMsg.includes('429') || errorMsg.includes('rate limit');
@@ -319,7 +283,7 @@ async function downloadAudio(url, retryCount = 0, proxyURL = null) {
       const delayMs = Math.pow(2, retryCount) * 5000;
       console.log(`⏳ Waiting ${delayMs / 1000}s before retry...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
-      return downloadAudio(url, retryCount + 1, proxyURL);
+      return downloadAudio(url, retryCount + 1);
     }
 
     throw error;
@@ -581,26 +545,6 @@ app.post('/api/transcript', async (req, res) => {
     
     console.log('Received request:', { videoUrl, targetLanguage });
     
-    // ============================================================
-    // PROXY ROUTING FLOW:
-    // 1. Extract user's IP from request headers
-    // 2. Detect user's country from IP (using GeoIP)
-    // 3. Build country-specific proxy URL (e.g., ...country-in or ...country-pk)
-    // 4. Use proxy for all YouTube requests (yt-dlp download)
-    // ============================================================
-    const userIP = getUserIP(req);
-    const userCountry = detectCountryFromIP(userIP);
-    const proxyURL = buildProxyURL(userCountry);
-    const proxyDetails = getProxyDetails(userCountry);
-    
-    // Log proxy usage details (only if proxy is enabled)
-    if (proxyURL) {
-      logProxyUsage(proxyDetails, videoUrl);
-      console.log(`✅ Request will use ${proxyDetails.country} proxy for YouTube access`);
-    } else {
-      console.log('⚠️  Proxy is disabled, downloading without proxy');
-    }
-    
     // Extract video ID
     const videoId = extractVideoId(videoUrl);
     if (!videoId) {
@@ -647,8 +591,8 @@ app.post('/api/transcript', async (req, res) => {
     if (!originalText || originalText.length === 0) {
       console.log('🎤 Starting transcription with OpenAI Whisper (auto-detect language)...');
       
-      sendProgress(res, 35, proxyURL ? 'Downloading audio via proxy...' : 'Downloading audio...');
-      audioPath = await downloadAudio(videoUrl, 0, proxyURL); // Pass proxy URL (can be null if disabled)
+      sendProgress(res, 35, 'Downloading audio...');
+      audioPath = await downloadAudio(videoUrl);
 
       if (!audioPath) {
         throw new Error('Could not download audio from YouTube');
@@ -685,12 +629,6 @@ app.post('/api/transcript', async (req, res) => {
     console.log('='.repeat(80));
     console.log('🎥 Video ID:', videoId);
     console.log('📝 Transcription Method:', transcriptionMethod);
-    if (proxyURL) {
-      console.log('🌍 User Country:', proxyDetails.country);
-      console.log('🌐 Proxy Used:', proxyDetails.host + ':' + proxyDetails.port);
-    } else {
-      console.log('🌐 Proxy: Disabled');
-    }
     if (targetLanguage) {
       console.log('🌐 Translation Target:', targetLanguage);
     }
@@ -792,26 +730,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Test proxy endpoint
-app.get('/api/test-proxy', (req, res) => {
-  const userIP = getUserIP(req);
-  const country = detectCountryFromIP(userIP);
-  const proxyURL = buildProxyURL(country);
-  const details = getProxyDetails(country);
-  
-  res.json({
-    userIP,
-    detectedCountry: country.toUpperCase(),
-    proxy: {
-      enabled: details.enabled,
-      host: details.host,
-      port: details.port,
-      username: details.username,
-      country: details.country,
-      url: proxyURL ? proxyURL.replace(/:[^:@]+@/, ':***@') : null // Sanitized
-    }
-  });
-});
 
 // Get pricing plans endpoint
 app.get('/api/plans', (req, res) => {
