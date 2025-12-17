@@ -13,6 +13,8 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import { getUserFriendlyError, formatErrorResponse, logError } from './services/errorHandler.js';
 import { generateSummary } from './services/aiSummaryService.js';
+import { extractCaptionsWithYtDlp } from './services/captionService.js';
+import { translateText, translateCaptions } from './services/translationService.js';
 
 dotenv.config();
 
@@ -632,47 +634,71 @@ app.post('/api/transcript', async (req, res) => {
 
     let originalText = null;
     let transcriptionMethod = 'captions';
+    let captionLanguage = null;
+    let captionSegments = null; // Store caption segments with timestamps
 
-    // Try to get captions first
-    console.log('📝 Checking for video captions...');
+    // ============================================================
+    // ✅ PHASE 1: YouTube Captions Extraction (Primary Method)
+    // Using yt-dlp for reliable caption extraction
+    // Benefits: Instant, free, no file size limits, works for long videos, bypasses YouTube API restrictions
+    // ============================================================
+    console.log('📝 Checking for video captions with yt-dlp...');
     sendProgress(res, 15, 'Checking for captions...');
 
     try {
-      const transcriptData = await info.getTranscript();
-      if (transcriptData && transcriptData.transcript) {
-        const transcript = transcriptData.transcript.content.body.initial_segments;
-        if (transcript && transcript.length > 0) {
-          console.log('✅ Video HAS captions available');
-          sendProgress(res, 30, 'Extracting captions...');
-
-          originalText = transcript
-            .map(segment => segment.snippet.text)
-            .join(' ')
-            .trim();
-
-          sendProgress(res, 40, 'Captions extracted successfully');
-        }
+      // Use caption service to extract captions
+      const captionData = await extractCaptionsWithYtDlp(videoUrl, videoId);
+      
+      if (captionData && captionData.fullText) {
+        originalText = captionData.fullText;
+        captionSegments = captionData.segments;
+        captionLanguage = captionData.language;
+        transcriptionMethod = 'yt-dlp-captions';
+        
+        console.log(`✅ Captions extracted successfully`);
+        console.log(`📊 Segments: ${captionData.totalSegments}`);
+        console.log(`📄 Length: ${captionData.totalCharacters} characters`);
+        console.log(`🌐 Language: ${captionLanguage}`);
+        
+        sendProgress(res, 40, 'Captions extracted successfully');
+      } else {
+        console.log('⚠️  No captions available for this video');
+        console.log('🔄 Will fallback to Whisper transcription');
       }
     } catch (captionError) {
-      console.log('❌ No captions found, will transcribe audio');
+      // Log detailed caption error for debugging
+      const errorMsg = captionError.message || 'Unknown error';
+      console.log('❌ Caption extraction failed:', errorMsg);
+      console.log('🔄 Will fallback to Whisper transcription');
     }
 
-    // If no captions, transcribe with Whisper
+    // ============================================================
+    // FALLBACK: Whisper Transcription (if no captions available)
+    // Only runs if captions extraction failed
+    // Note: Limited to 25MB files, slower, costs money
+    // ============================================================
     if (!originalText || originalText.length === 0) {
-      console.log('🎤 Starting transcription with OpenAI Whisper (auto-detect language)...');
+      console.log('='.repeat(80));
+      console.log('🎤 FALLBACK TO WHISPER TRANSCRIPTION');
+      console.log('='.repeat(80));
+      console.log('⚠️  No captions available, using OpenAI Whisper API');
+      console.log('⏱️  This will take longer and use API credits');
+      console.log('💰 Cost: ~$0.006 per minute of audio');
+      console.log('='.repeat(80));
       
-      sendProgress(res, 35, 'Downloading audio...');
+      sendProgress(res, 35, 'No captions found. Downloading audio for transcription...');
       audioPath = await downloadAudio(videoUrl);
 
       if (!audioPath) {
         throw new Error('Could not download audio from YouTube');
       }
 
-      sendProgress(res, 50, 'Transcribing audio (auto-detecting language)...');
+      sendProgress(res, 50, 'Transcribing audio with Whisper (auto-detecting language)...');
       const whisperResult = await transcribeWithWhisper(audioPath);
       originalText = whisperResult.text;
       transcriptionMethod = 'openai-whisper';
 
+      console.log('✅ Whisper transcription completed');
       sendProgress(res, 65, 'Transcription completed');
     }
 
@@ -682,7 +708,17 @@ app.post('/api/transcript', async (req, res) => {
     
     if (targetLanguage) {
       sendProgress(res, 70, `Translating to ${targetLanguage}...`);
-      translatedText = await translateWithGroq(originalText, targetLanguage);
+      
+      // Use captions for translation if available
+      if (captionSegments && captionSegments.length > 0) {
+        console.log('📝 Using captions for translation');
+        const translationResult = await translateCaptions(captionSegments, targetLanguage);
+        translatedText = translationResult.translatedText;
+      } else {
+        console.log('📝 Using text for translation');
+        translatedText = await translateWithGroq(originalText, targetLanguage);
+      }
+      
       finalText = translatedText;
     } else {
       sendProgress(res, 70, 'Finalizing transcript...');
@@ -699,6 +735,14 @@ app.post('/api/transcript', async (req, res) => {
     console.log('='.repeat(80));
     console.log('🎥 Video ID:', videoId);
     console.log('📝 Transcription Method:', transcriptionMethod);
+    if (transcriptionMethod === 'captions') {
+      console.log('✅ Source: YouTube Captions (instant, free)');
+      if (captionLanguage) {
+        console.log('🌐 Caption Language:', captionLanguage);
+      }
+    } else {
+      console.log('🔄 Source: Whisper API (fallback)');
+    }
     if (targetLanguage) {
       console.log('🌐 Translation Target:', targetLanguage);
     }
@@ -713,6 +757,12 @@ app.post('/api/transcript', async (req, res) => {
       videoId,
       transcriptionMethod
     };
+
+    // Include caption segments with timestamps if available
+    if (captionSegments && captionSegments.length > 0) {
+      responseData.captions = captionSegments;
+      responseData.captionLanguage = captionLanguage;
+    }
 
     if (targetLanguage) {
       // Translation mode - return both original and translated

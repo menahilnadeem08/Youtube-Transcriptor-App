@@ -6,6 +6,7 @@ import LoadingOverlay from './LoadingOverlay';
 import HomePage from './HomePage';
 import PricingPage from './PricingPage';
 import SummarySection from './SummarySection';
+import CaptionViewer from './components/CaptionViewer';
 import { SUPPORTED_LANGUAGES } from './languages';
 
 
@@ -370,7 +371,9 @@ export default function App() {
                         readingTime: data.readingTime,
                         videoId: data.videoId,
                         mode: 'transcribe',
-                        method: data.transcriptionMethod
+                        method: data.transcriptionMethod,
+                        captions: data.captions || null,  // Add captions data
+                        captionLanguage: data.captionLanguage || null
                       });
                     } else {
                       setResult({
@@ -381,7 +384,9 @@ export default function App() {
                         videoId: data.videoId,
                         mode: 'translate',
                         targetLanguage: data.targetLanguage,
-                        method: data.transcriptionMethod
+                        method: data.transcriptionMethod,
+                        captions: data.captions || null,  // Add captions data
+                        captionLanguage: data.captionLanguage || null
                       });
                     }
                     setTimeout(() => setLoading(false), 500);
@@ -1333,24 +1338,31 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{
-              marginBottom: '20px'
-            }}>
+            {/* Caption Viewer with Timestamps */}
+            {result.captions && result.captions.length > 0 && result.mode === 'transcribe' ? (
+              <CaptionViewer 
+                captions={result.captions} 
+                fullText={result.text}
+              />
+            ) : (
               <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '10px',
-                padding: '0 4px'
+                marginBottom: '20px'
               }}>
-                <h3 style={{
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  color: '#333',
-                  margin: 0
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: '10px',
+                  padding: '0 4px'
                 }}>
-                  {result.mode === 'transcribe' ? 'Transcription' : 'Translation'} Output
-                </h3>
+                  <h3 style={{
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    color: '#333',
+                    margin: 0
+                  }}>
+                    {result.mode === 'transcribe' ? 'Transcription' : 'Translation'} Output
+                  </h3>
                 <button
                   onClick={copyToClipboard}
                   style={{
@@ -1551,7 +1563,9 @@ export default function App() {
                 {searchQuery ? highlightText(result.text, searchQuery) : result.text}
               </div>
             </div>
+            )}
 
+            {/* Download Buttons */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(3, 1fr)',
