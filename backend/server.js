@@ -282,22 +282,6 @@ async function downloadAudio(url, retryCount = 0) {
   } catch (error) {
     const errorMsg = error.message || error.toString();
     console.error(` ✗ Download failed: ${errorMsg}`);
-    
-    // Log complete error details
-    console.error('='.repeat(80));
-    console.error('❌ DOWNLOAD AUDIO ERROR DETAILS:');
-    console.error('='.repeat(80));
-    console.error('Error Message:', errorMsg);
-    console.error('Error Type:', error.constructor.name);
-    console.error('Error Stack:', error.stack || 'No stack trace');
-    console.error('Complete Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    if (error.code) console.error('Error Code:', error.code);
-    if (error.errno) console.error('Error Number:', error.errno);
-    if (error.syscall) console.error('System Call:', error.syscall);
-    console.error('Retry Count:', retryCount);
-    console.error('Video URL:', url);
-    console.error('Timestamp:', new Date().toISOString());
-    console.error('='.repeat(80));
 
     const isBotError = errorMsg.includes('Sign in to confirm') || errorMsg.includes('bot') || 
                        errorMsg.includes('429') || errorMsg.includes('rate limit');
@@ -353,26 +337,6 @@ async function transcribeWithWhisper(audioPath, retryCount = 0) {
   } catch (openaiError) {
     const errorMsg = openaiError.message || openaiError.toString();
     console.error(`❌ OpenAI Whisper failed: ${errorMsg}`);
-    
-    // Log complete error details
-    console.error('='.repeat(80));
-    console.error('❌ OPENAI WHISPER ERROR DETAILS:');
-    console.error('='.repeat(80));
-    console.error('Error Message:', errorMsg);
-    console.error('Error Type:', openaiError.constructor.name);
-    console.error('Error Stack:', openaiError.stack || 'No stack trace');
-    console.error('Complete Error Object:', JSON.stringify(openaiError, Object.getOwnPropertyNames(openaiError), 2));
-    if (openaiError.status) console.error('HTTP Status:', openaiError.status);
-    if (openaiError.statusCode) console.error('HTTP Status Code:', openaiError.statusCode);
-    if (openaiError.code) console.error('Error Code:', openaiError.code);
-    if (openaiError.response) {
-      console.error('API Response Status:', openaiError.response.status);
-      console.error('API Response Data:', JSON.stringify(openaiError.response.data, null, 2));
-    }
-    console.error('Audio Path:', audioPath);
-    console.error('Retry Count:', retryCount);
-    console.error('Timestamp:', new Date().toISOString());
-    console.error('='.repeat(80));
 
     const isRetryableError = errorMsg.includes('Connection') || 
                             errorMsg.includes('ECONNREFUSED') || 
@@ -653,28 +617,17 @@ app.post('/api/transcript', async (req, res) => {
       }
       
       // Check if video has streaming data (means it's playable)
-      if (!info?.streaming_data && !info?.playability_status?.status === 'OK') {
+      if (!info?.streaming_data && info?.playability_status?.status !== 'OK') {
         // If no streaming data and playability is not OK, video might not be accessible
         console.log('⚠️  Warning: Video may not be fully accessible');
       }
     } catch (accessError) {
       // If we detected an access issue, throw it
       if (accessError.message.includes('private') || accessError.message.includes('unplayable') || accessError.message.includes('sign-in')) {
-        // Log complete error before throwing
-        console.error('='.repeat(80));
-        console.error('❌ VIDEO ACCESSIBILITY CHECK ERROR:');
-        console.error('='.repeat(80));
-        console.error('Error Message:', accessError.message);
-        console.error('Error Type:', accessError.constructor.name);
-        console.error('Complete Error Object:', JSON.stringify(accessError, Object.getOwnPropertyNames(accessError), 2));
-        console.error('Video ID:', videoId);
-        console.error('Timestamp:', new Date().toISOString());
-        console.error('='.repeat(80));
         throw accessError;
       }
       // Otherwise, log and continue (might still work)
       console.log('⚠️  Could not verify video accessibility, continuing...');
-      console.error('Access Check Warning - Complete Error:', JSON.stringify(accessError, Object.getOwnPropertyNames(accessError), 2));
     }
 
     let originalText = null;
@@ -775,18 +728,7 @@ app.post('/api/transcript', async (req, res) => {
     res.end();
 
   } catch (error) {
-    // Log complete error with context
-    console.error('='.repeat(80));
-    console.error('❌ TRANSCRIPT ENDPOINT ERROR:');
-    console.error('='.repeat(80));
-    console.error('Video URL:', req.body?.videoUrl || 'Not provided');
-    console.error('Video ID:', videoId || 'Not extracted');
-    console.error('Target Language:', req.body?.targetLanguage || 'Not provided');
-    console.error('='.repeat(80));
-    
-    // Use logError which logs complete error details
     logError('transcript', error);
-    
     const errorResponse = formatErrorResponse(error);
     
     if (!res.writableEnded) {
