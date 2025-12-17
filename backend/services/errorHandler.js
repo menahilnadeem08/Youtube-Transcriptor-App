@@ -387,7 +387,62 @@ export function formatErrorResponse(error) {
  * @param {Error} error - The error object
  */
 export function logError(context, error) {
+  console.error('='.repeat(80));
   console.error(`[${context.toUpperCase()}] Error occurred:`, error.message);
-  getUserFriendlyError(error); // This will log detailed error info
+  console.error('='.repeat(80));
+  
+  // Log complete error object
+  console.error('Complete Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+  console.error('Error Type:', error.constructor.name);
+  console.error('Error Stack:', error.stack || 'No stack trace available');
+  
+  // Log all error properties
+  if (error.response) {
+    console.error('API Response Status:', error.response.status);
+    console.error('API Response Headers:', JSON.stringify(error.response.headers, null, 2));
+    console.error('API Response Data:', JSON.stringify(error.response.data, null, 2));
+  }
+  if (error.request) {
+    console.error('Request Details:', JSON.stringify(error.request, null, 2));
+  }
+  if (error.status) {
+    console.error('HTTP Status:', error.status);
+  }
+  if (error.statusCode) {
+    console.error('HTTP Status Code:', error.statusCode);
+  }
+  if (error.code) {
+    console.error('Error Code:', error.code);
+  }
+  if (error.errno) {
+    console.error('Error Number:', error.errno);
+  }
+  if (error.syscall) {
+    console.error('System Call:', error.syscall);
+  }
+  if (error.error && typeof error.error === 'object') {
+    console.error('Nested Error Object:', JSON.stringify(error.error, null, 2));
+  }
+  
+  // Log all enumerable properties
+  const errorProps = {};
+  for (const key in error) {
+    if (error.hasOwnProperty(key)) {
+      try {
+        errorProps[key] = error[key];
+      } catch (e) {
+        errorProps[key] = '[Cannot serialize]';
+      }
+    }
+  }
+  if (Object.keys(errorProps).length > 0) {
+    console.error('All Error Properties:', JSON.stringify(errorProps, null, 2));
+  }
+  
+  console.error('Timestamp:', new Date().toISOString());
+  console.error('='.repeat(80));
+  
+  // Also call getUserFriendlyError for formatted error info
+  getUserFriendlyError(error);
 }
 

@@ -233,18 +233,25 @@ async function downloadAudio(url, retryCount = 0) {
 
     const combinedOutput = (stdout + stderr).toLowerCase();
     
-    if (combinedOutput.includes('error') || combinedOutput.includes('unavailable') || combinedOutput.includes('private')) {
-      if (combinedOutput.includes('private') || combinedOutput.includes('sign in')) {
-        throw new Error('Video is private or requires sign-in');
-      }
-      if (combinedOutput.includes('unavailable') || combinedOutput.includes('not available')) {
-        throw new Error('Video is unavailable or removed');
-      }
-      if (combinedOutput.includes('age-restricted') || combinedOutput.includes('age restricted')) {
-        throw new Error('Video is age-restricted');
-      }
-      if (combinedOutput.includes('429') || combinedOutput.includes('rate limit')) {
-        throw new Error('YouTube rate limit exceeded. Please try again later.');
+    // Check for specific error conditions
+    if (combinedOutput.includes('private') || combinedOutput.includes('sign in') || combinedOutput.includes('sign-in')) {
+      throw new Error('Video is private or requires sign-in');
+    }
+    if (combinedOutput.includes('unavailable') || combinedOutput.includes('not available') || combinedOutput.includes('removed')) {
+      throw new Error('Video is unavailable or removed');
+    }
+    if (combinedOutput.includes('age-restricted') || combinedOutput.includes('age restricted')) {
+      throw new Error('Video is age-restricted');
+    }
+    if (combinedOutput.includes('429') || combinedOutput.includes('rate limit')) {
+      throw new Error('YouTube rate limit exceeded. Please try again later.');
+    }
+    if (combinedOutput.includes('error') && !combinedOutput.includes('warning')) {
+      // Only throw on actual errors, not warnings
+      if (combinedOutput.includes('this video is not available') || 
+          combinedOutput.includes('video unavailable') ||
+          combinedOutput.includes('private video')) {
+        throw new Error('Video is private or unavailable');
       }
     }
 
@@ -275,6 +282,22 @@ async function downloadAudio(url, retryCount = 0) {
   } catch (error) {
     const errorMsg = error.message || error.toString();
     console.error(` ✗ Download failed: ${errorMsg}`);
+    
+    // Log complete error details
+    console.error('='.repeat(80));
+    console.error('❌ DOWNLOAD AUDIO ERROR DETAILS:');
+    console.error('='.repeat(80));
+    console.error('Error Message:', errorMsg);
+    console.error('Error Type:', error.constructor.name);
+    console.error('Error Stack:', error.stack || 'No stack trace');
+    console.error('Complete Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    if (error.code) console.error('Error Code:', error.code);
+    if (error.errno) console.error('Error Number:', error.errno);
+    if (error.syscall) console.error('System Call:', error.syscall);
+    console.error('Retry Count:', retryCount);
+    console.error('Video URL:', url);
+    console.error('Timestamp:', new Date().toISOString());
+    console.error('='.repeat(80));
 
     const isBotError = errorMsg.includes('Sign in to confirm') || errorMsg.includes('bot') || 
                        errorMsg.includes('429') || errorMsg.includes('rate limit');
@@ -330,6 +353,26 @@ async function transcribeWithWhisper(audioPath, retryCount = 0) {
   } catch (openaiError) {
     const errorMsg = openaiError.message || openaiError.toString();
     console.error(`❌ OpenAI Whisper failed: ${errorMsg}`);
+    
+    // Log complete error details
+    console.error('='.repeat(80));
+    console.error('❌ OPENAI WHISPER ERROR DETAILS:');
+    console.error('='.repeat(80));
+    console.error('Error Message:', errorMsg);
+    console.error('Error Type:', openaiError.constructor.name);
+    console.error('Error Stack:', openaiError.stack || 'No stack trace');
+    console.error('Complete Error Object:', JSON.stringify(openaiError, Object.getOwnPropertyNames(openaiError), 2));
+    if (openaiError.status) console.error('HTTP Status:', openaiError.status);
+    if (openaiError.statusCode) console.error('HTTP Status Code:', openaiError.statusCode);
+    if (openaiError.code) console.error('Error Code:', openaiError.code);
+    if (openaiError.response) {
+      console.error('API Response Status:', openaiError.response.status);
+      console.error('API Response Data:', JSON.stringify(openaiError.response.data, null, 2));
+    }
+    console.error('Audio Path:', audioPath);
+    console.error('Retry Count:', retryCount);
+    console.error('Timestamp:', new Date().toISOString());
+    console.error('='.repeat(80));
 
     const isRetryableError = errorMsg.includes('Connection') || 
                             errorMsg.includes('ECONNREFUSED') || 
@@ -558,7 +601,81 @@ app.post('/api/transcript', async (req, res) => {
     const youtube = await Innertube.create();
 
     sendProgress(res, 10, 'Fetching video information...');
-    const info = await youtube.getInfo(videoId);
+    
+    // Suppress YouTube.js parser warnings (they're just noise and auto-handled)
+    const originalConsoleWarn = console.warn;
+    console.warn = (...args) => {
+      const message = args.join(' ');
+      // Suppress YouTube.js parser warnings
+      if (message.includes('[YOUTUBEJS][Parser]') || message.includes('CourseProgressView')) {
+        return; // Don't log parser warnings
+      }
+      originalConsoleWarn.apply(console, args);
+    };
+    
+    let info;
+    try {
+      info = await youtube.getInfo(videoId);
+    } catch (infoError) {
+      // Restore console.warn
+      console.warn = originalConsoleWarn;
+      
+      const errorMsg = infoError.message?.toLowerCase() || '';
+      if (errorMsg.includes('private') || errorMsg.includes('unavailable') || errorMsg.includes('sign in')) {
+        throw new Error('Video is private, unavailable, or requires sign-in');
+      }
+      throw infoError;
+    }
+    
+    // Restore console.warn after getting info
+    console.warn = originalConsoleWarn;
+    
+    // Check if video is playable/accessible
+    // YouTube.js info object may have playability_status or basic_info with privacy status
+    try {
+      // Check playability_status if available
+      if (info?.playability_status) {
+        const status = info.playability_status.status;
+        if (status === 'LOGIN_REQUIRED' || status === 'UNPLAYABLE' || status === 'ERROR') {
+          throw new Error('Video is private, unplayable, or requires sign-in');
+        }
+      }
+      
+      // Check basic_info for privacy status
+      if (info?.basic_info) {
+        const privacy = info.basic_info.privacy;
+        if (privacy === 'PRIVATE' || privacy === 'UNLISTED') {
+          // Unlisted videos might still be accessible, but private ones are not
+          if (privacy === 'PRIVATE') {
+            throw new Error('Video is private and cannot be accessed');
+          }
+        }
+      }
+      
+      // Check if video has streaming data (means it's playable)
+      if (!info?.streaming_data && !info?.playability_status?.status === 'OK') {
+        // If no streaming data and playability is not OK, video might not be accessible
+        console.log('⚠️  Warning: Video may not be fully accessible');
+      }
+    } catch (accessError) {
+      // If we detected an access issue, throw it
+      if (accessError.message.includes('private') || accessError.message.includes('unplayable') || accessError.message.includes('sign-in')) {
+        // Log complete error before throwing
+        console.error('='.repeat(80));
+        console.error('❌ VIDEO ACCESSIBILITY CHECK ERROR:');
+        console.error('='.repeat(80));
+        console.error('Error Message:', accessError.message);
+        console.error('Error Type:', accessError.constructor.name);
+        console.error('Complete Error Object:', JSON.stringify(accessError, Object.getOwnPropertyNames(accessError), 2));
+        console.error('Video ID:', videoId);
+        console.error('Timestamp:', new Date().toISOString());
+        console.error('='.repeat(80));
+        throw accessError;
+      }
+      // Otherwise, log and continue (might still work)
+      console.log('⚠️  Could not verify video accessibility, continuing...');
+      console.error('Access Check Warning - Complete Error:', JSON.stringify(accessError, Object.getOwnPropertyNames(accessError), 2));
+    }
 
     let originalText = null;
     let transcriptionMethod = 'captions';
@@ -658,7 +775,18 @@ app.post('/api/transcript', async (req, res) => {
     res.end();
 
   } catch (error) {
+    // Log complete error with context
+    console.error('='.repeat(80));
+    console.error('❌ TRANSCRIPT ENDPOINT ERROR:');
+    console.error('='.repeat(80));
+    console.error('Video URL:', req.body?.videoUrl || 'Not provided');
+    console.error('Video ID:', videoId || 'Not extracted');
+    console.error('Target Language:', req.body?.targetLanguage || 'Not provided');
+    console.error('='.repeat(80));
+    
+    // Use logError which logs complete error details
     logError('transcript', error);
+    
     const errorResponse = formatErrorResponse(error);
     
     if (!res.writableEnded) {
