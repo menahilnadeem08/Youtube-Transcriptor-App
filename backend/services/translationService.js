@@ -18,7 +18,7 @@ export async function translateText(text, targetLanguage) {
     messages: [{ role: 'user', content: prompt }],
     model: 'llama-3.3-70b-versatile',
     temperature: 0.3,
-    max_tokens: 8000
+    max_tokens: 32000 // Increased for long texts
   });
   
   return completion.choices[0].message.content.trim();
@@ -36,10 +36,46 @@ export async function translateCaptions(captionSegments, targetLanguage) {
   // Combine all caption text for translation
   const fullText = captionSegments.map(seg => seg.text).join(' ');
   
-  // Translate the full text
-  const translatedFullText = await translateText(fullText, targetLanguage);
+  console.log(`📏 Total text length: ${fullText.length} characters`);
   
-  console.log(`✅ Translation completed`);
+  // Split text into chunks if too long (max ~15000 chars per chunk to stay within token limits)
+  const MAX_CHUNK_SIZE = 15000;
+  const chunks = [];
+  
+  if (fullText.length > MAX_CHUNK_SIZE) {
+    console.log(`⚠️  Text too long, splitting into chunks...`);
+    
+    // Split by sentences to maintain context
+    const sentences = fullText.match(/[^.!?]+[.!?]+/g) || [fullText];
+    let currentChunk = '';
+    
+    for (const sentence of sentences) {
+      if ((currentChunk + sentence).length > MAX_CHUNK_SIZE) {
+        if (currentChunk) chunks.push(currentChunk.trim());
+        currentChunk = sentence;
+      } else {
+        currentChunk += sentence;
+      }
+    }
+    
+    if (currentChunk) chunks.push(currentChunk.trim());
+    console.log(`📦 Split into ${chunks.length} chunks`);
+  } else {
+    chunks.push(fullText);
+  }
+  
+  // Translate each chunk
+  const translatedChunks = [];
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`🔄 Translating chunk ${i + 1}/${chunks.length}...`);
+    const translated = await translateText(chunks[i], targetLanguage);
+    translatedChunks.push(translated);
+  }
+  
+  // Combine translated chunks
+  const translatedFullText = translatedChunks.join(' ');
+  
+  console.log(`✅ Translation completed (${translatedFullText.length} characters)`);
   
   return {
     translatedText: translatedFullText,
